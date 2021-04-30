@@ -16,7 +16,6 @@ $ pip install Scikit-Image
 The installation method is the same as OpenPCDet:
 
 ```bash
-$ cd tools
 $ python setup.py develop
 ```
 
