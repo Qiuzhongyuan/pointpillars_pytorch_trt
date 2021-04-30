@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<opencv_storage>
+<MEAN type_id="opencv-matrix">
+  <rows>3</rows>
+  <cols>1</cols>
+  <dt>f</dt>
+  <data>
+    4.85000014e-01 4.56000000e-01 4.05999988e-01</data></MEAN>
+<STD type_id="opencv-matrix">
+  <rows>3</rows>
+  <cols>1</cols>
+  <dt>f</dt>
+  <data>
+    2.29000002e-01 2.24000007e-01 2.24999994e-01</data></STD>
+<IMAGESIZE type_id="opencv-matrix">
+  <rows>2</rows>
+  <cols>1</cols>
+  <dt>i</dt>
+  <data>
+    640 640</data></IMAGESIZE>
+<MODE>2</MODE>
+<SAVE_IMAGE>0</SAVE_IMAGE>
+<USE_MESN>0</USE_MESN>
+<CUDA_INDEX>0</CUDA_INDEX>
+</opencv_storage>
