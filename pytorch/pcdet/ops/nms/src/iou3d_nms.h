@@ -24,6 +24,6 @@
 #define CHECK_ERROR(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
 
-torch::Tensor
-    nms(torch::Tensor batch_box, torch::Tensor batch_cls, int nms_pre_maxsize, int nms_post_maxsize, float nms_thresh, float score_thresh, int use_bev);
+std::vector<torch::Tensor>
+nms(torch::Tensor batch_box, torch::Tensor batch_cls, int nms_pre_maxsize, int nms_post_maxsize, float nms_thresh, float score_thresh, int use_bev);
 #endif

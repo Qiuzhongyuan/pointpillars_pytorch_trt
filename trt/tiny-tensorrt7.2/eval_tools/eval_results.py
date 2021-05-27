@@ -43,10 +43,10 @@ def main():
     det_annos = []
     
     for name in eval_names:
-        output_1 = os.path.join(args.trt_outputs, name + '_1.bin')
+        output_1 = os.path.join(args.trt_outputs, name + '_0.bin')
         box1, score1, type1 = load_preds(output_1, True)
         
-        output_2 = os.path.join(args.trt_outputs, name + '_2.bin')
+        output_2 = os.path.join(args.trt_outputs, name + '_1.bin')
         box2, score2, type2 = load_preds(output_2, False)
         
         box = torch.cat([box1, box2], 0)
@@ -60,8 +60,8 @@ def main():
         
         det_annos += annos
 
-        print(annos)
-        1/0
+        # print(annos)
+        # 1/0
 
 
     ap_result_str, ap_dict = eval.get_official_eval_result(eval_gt_annos, det_annos, class_names)

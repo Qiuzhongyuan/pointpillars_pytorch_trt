@@ -82,10 +82,6 @@ void Dense::terminate()
 
 size_t Dense::getWorkspaceSize(const nvinfer1::PluginTensorDesc* inputs, int nbInputs, const nvinfer1::PluginTensorDesc* outputs, int nbOutputs) const
 {
-    Dims indim = inputs[0].dims;
-    size_t inSize = indim.d[indim.nbDims-3]*indim.d[indim.nbDims-2];
-    size_t outSize = _channels*_spatialShape[0]*_spatialShape[1]*_spatialShape[2];
-    // return sizeof(float)*inSize+sizeof(float)*outSize;
     return 0;
 }
 
@@ -100,25 +96,19 @@ int Dense::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
 
     int const* indices_rw = reinterpret_cast<int const*>(inputs[1]);
 
-    // if (DataType::kHALF == inputDesc->type){
+
 #ifdef USE_FP16
-        //printf("DataType::kHALF == inputDesc->type\n\n\n\n");
         __half const* features_rw = reinterpret_cast<__half const*>(inputs[0]);
         __half* output_rw   = reinterpret_cast<__half*>(outputs[0]);
         init_float_half(output_rw, (__half)0.0, outsize);
 	    DenseSpace::cuda_scatter_fp16(features_rw, indices_rw, output_rw, _spatialShape, num_voxels, num_features);
-    // }else if(DataType::kFLOAT == inputDesc->type||DataType::kINT8 == inputDesc->type){
 #else
-        //printf("DataType::kFLOAT32 == inputDesc->type||DataType::kINT8 == inputDesc->type\n\n\n\n\n\n");
         float const* features_rw = reinterpret_cast<float const*>(inputs[0]);
         float* output_rw   = reinterpret_cast<float*>(outputs[0]);
-        // init_zeros(output_rw, 0, outsize);
         init_float(output_rw, 0, outsize);
         DenseSpace::cuda_scatter(features_rw, indices_rw, output_rw, _spatialShape, num_voxels, num_features);
 
 #endif
-
-    //printf("***** after dense *******\n");
     return 0;
 }
 

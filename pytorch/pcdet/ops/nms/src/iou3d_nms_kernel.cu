@@ -217,7 +217,9 @@ __device__ inline float iou_bev(const float *box_a, const float *box_b){
     float sa = box_a[3] * box_a[4];
     float sb = box_b[3] * box_b[4];
     float s_overlap = box_overlap(box_a, box_b);
-    return s_overlap / fmaxf(sa + sb - s_overlap, EPS);
+    float union_area = fmaxf(sa + sb - s_overlap, 0);
+    if(union_area<=0) return 0.0;
+    return s_overlap / union_area;
 }
 
 __device__ inline float iou_normal(float const * const a, float const * const b) {
@@ -230,7 +232,9 @@ __device__ inline float iou_normal(float const * const a, float const * const b)
     float interS = width * height;
     float Sa = a[3] * a[2];
     float Sb = b[3] * b[2];
-    return interS / fmaxf(Sa + Sb - interS, EPS);
+    float union_area = fmaxf(Sa + Sb - interS, 0);
+    if(union_area<=0) return 0.0;
+    return interS / union_area;
 }
 
 
@@ -238,46 +242,93 @@ extern "C"
 __global__
 void squeeze_for_score_kernel(const float *cls_rw, float *score, int *cls_index, int *range_index_rw, int* counter, int num_cls, int num_box, float score_thresh)
 {
-
-    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+    int i    = threadIdx.x + blockIdx.x * blockDim.x;
 
     __shared__ int dCounter;
+    if(threadIdx.x == 0)    dCounter = 0;
+    __syncthreads();
 
-    for(int i = idx; i < num_box; i += stride)
+    bool isValid = i >= num_box ? false : true;
+
+    int pos, cls;
+    float scoreTmp;
+    if(isValid)
     {
-        if(threadIdx.x == 0)    dCounter = 0;
-        __syncthreads();
-
-        int cls = 0;
-        float scoreTmp = cls_rw[i];
+        cls = 0;
+        scoreTmp = cls_rw[i * num_cls];
 
         for(int j = 1; j < num_cls; ++j)
         {
-            float  scoreNow  = cls_rw[j * num_box + i];
+            float  scoreNow  = cls_rw[i * num_cls + j];
             bool isSmaller = (scoreTmp < scoreNow);
 
             scoreTmp = isSmaller ? scoreNow : scoreTmp;
             cls      = isSmaller ? j        : cls;
         }
-
-        bool isValid = (score_thresh < scoreTmp);
-        int pos;
-
-        if(isValid) pos = atomicAdd(&dCounter, 1);
-        __syncthreads();
-        if(threadIdx.x == 0) dCounter = atomicAdd(counter, dCounter);
-        __syncthreads();
-
-        if(isValid)
-        {
-            pos += dCounter;
-            cls_index     [i] = cls;
-            range_index_rw[pos] = i;
-            score         [pos] = -scoreTmp;
-        }
-
+        isValid = (score_thresh < scoreTmp);
     }
+
+    if(isValid) pos = atomicAdd(&dCounter, 1);
+    __syncthreads();
+    if(threadIdx.x == 0) dCounter = atomicAdd(counter, dCounter);
+    __syncthreads();
+
+    if(isValid)
+    {
+        pos += dCounter;
+        cls_index     [i] = cls;
+        range_index_rw[pos] = i;
+        score         [pos] = -scoreTmp;
+    }
+
+
+}
+
+
+extern "C"
+__global__
+void squeeze_for_score_half_kernel(const __half *cls_rw, float *score, int *cls_index, int *range_index_rw, int* counter, int num_cls, int num_box, float score_thresh)
+{
+    int i    = threadIdx.x + blockIdx.x * blockDim.x;
+
+    __shared__ int dCounter;
+    if(threadIdx.x == 0)    dCounter = 0;
+    __syncthreads();
+
+    bool isValid = i >= num_box ? false : true;
+
+    int pos, cls;
+    float scoreTmp;
+    if(isValid)
+    {
+        cls = 0;
+        scoreTmp = __half2float(cls_rw[i * num_cls]);
+
+        for(int j = 1; j < num_cls; ++j)
+        {
+            float scoreNow  = __half2float(cls_rw[i * num_cls + j]);
+            bool isSmaller = (scoreTmp < scoreNow);
+
+            scoreTmp = isSmaller ? scoreNow : scoreTmp;
+            cls      = isSmaller ? j        : cls;
+        }
+        isValid = (score_thresh < scoreTmp);
+    }
+
+    if(isValid) pos = atomicAdd(&dCounter, 1);
+    __syncthreads();
+    if(threadIdx.x == 0) dCounter = atomicAdd(counter, dCounter);
+    __syncthreads();
+
+    if(isValid)
+    {
+        pos += dCounter;
+        cls_index     [i] = cls;
+        range_index_rw[pos] = i;
+        score         [pos] = -scoreTmp;
+    }
+
+
 }
 
 __global__ void copy_to_temp_kernel_bev(int *range_index_rw, float *score, int *cls_index, const float *box_s_rw, int *cls_temp, float *box_temp,
@@ -293,7 +344,7 @@ __global__ void copy_to_temp_kernel_bev(int *range_index_rw, float *score, int *
         cls_temp[i] = cls_index[index];
         #pragma unroll 7
         for (int j = 0; j < 7; ++j)
-            box_temp[j * num + i] = box_s_rw[j * original_num + index];
+            box_temp[i * 7 + j] = box_s_rw[index * num_box_info + j];
     }
 
 }
@@ -312,8 +363,44 @@ __global__ void copy_to_temp_kernel_nor(int *range_index_rw, float *score, int *
 
         #pragma unroll 4
         for (int j = 0; j < 4; ++j)
-            box_temp[j * num + i] = box_s_rw[j * original_num + index];
+            box_temp[i * 4 + j] = box_s_rw[index * num_box_info + j];
+    }
 
+}
+
+__global__ void copy_to_temp_half_kernel_bev(int *range_index_rw, float *score, int *cls_index, const __half *box_s_rw, int *cls_temp, float *box_temp,
+                                        int num, int original_num, int num_box_info)
+{
+
+    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for(int i = idx; i < num; i += stride)
+    {
+        int index   = range_index_rw[i];
+        cls_temp[i] = cls_index[index];
+        #pragma unroll 7
+        for (int j = 0; j < 7; ++j)
+            box_temp[i * 7 + j] = __half2float(box_s_rw[index * num_box_info + j]);
+    }
+
+}
+
+__global__ void copy_to_temp_half_kernel_nor(int *range_index_rw, float *score, int *cls_index, const __half *box_s_rw, int *cls_temp, float *box_temp,
+                                    int num, int original_num, int num_box_info)
+{
+
+    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for(int i = idx; i < num; i += stride)
+    {
+        int index   = range_index_rw[i];
+        cls_temp[i] = cls_index[index];
+
+        #pragma unroll 4
+        for (int j = 0; j < 4; ++j)
+            box_temp[i * 4 + j] = __half2float(box_s_rw[index * num_box_info + j]);
     }
 
 }
@@ -336,20 +423,11 @@ __global__ void iou_self_bev_kernel(int nms_pre_maxsize, const float *boxes, int
         int b_idx = col;
 
         if(a_idx!=b_idx){
-            float box_a[7];
-            float box_b[7];
-            #pragma unroll 7
-            for(int j = 0; j < 7; ++j)
-            {
-                box_a[j] = boxes[j * nms_pre_maxsize + a_idx];
-                box_b[j] = boxes[j * nms_pre_maxsize + b_idx];
-            }
-            float cur_iou_bev = iou_bev(reinterpret_cast<const float*>(&box_a[0]), reinterpret_cast<const float*>(&box_b[0]));
-
+            float cur_iou_bev = iou_bev(boxes + a_idx * 7, boxes + b_idx * 7);
             ans_iou[row * nms_pre_maxsize + col] = cur_iou_bev;
             ans_iou[col * nms_pre_maxsize + row] = cur_iou_bev;
         }else{
-            ans_iou[row * nms_pre_maxsize + col] = 1;
+            ans_iou[row * nms_pre_maxsize + col] = 1.0;
         }
     }
 }
@@ -369,21 +447,12 @@ __global__ void iou_self_kernel(int nms_pre_maxsize, const float *boxes, int *in
         int b_idx = index[col];
 
         if(a_idx!=b_idx){
-            float box_a[4];
-            float box_b[4];
-            #pragma unroll 4
-            for(int j = 0; j < 4; ++j)
-            {
-                box_a[j] = boxes[j * nms_pre_maxsize + a_idx];
-                box_b[j] = boxes[j * nms_pre_maxsize + b_idx];
-            }
-            float cur_iou = iou_normal(reinterpret_cast<const float*>(&box_a[0]), reinterpret_cast<const float*>(&box_b[0]));
-
+            float cur_iou = iou_normal(boxes + a_idx * 4, boxes + b_idx * 4);
             ans_iou[row * nms_pre_maxsize + col] = cur_iou;
             ans_iou[col * nms_pre_maxsize + row] = cur_iou;
         }
         else{
-            ans_iou[row * nms_pre_maxsize + col] = 1;
+            ans_iou[row * nms_pre_maxsize + col] = 1.0;
         }
     }
 
@@ -432,10 +501,10 @@ void concat_outputs_kernel_bev(float *box_temp, float *score_temp, int *cls_temp
         int index = range_index_rw[i];
         #pragma unroll 7
         for (int j = 0; j < 7; ++j)
-            dst_s_rw[j * nms_post_maxsize + i] = box_temp[j * orign_num + index];
+            dst_s_rw[i * 9 + j] = box_temp[index * 7 + j];
 
-        dst_s_rw[7 * nms_post_maxsize + i] = -score_temp[index];//前面排序时存为负值
-        dst_s_rw[8 * nms_post_maxsize + i] = (float)cls_temp[index];
+        dst_s_rw[i * 9 + 7] = -score_temp[index];//前面排序时存为负值
+        dst_s_rw[i * 9 + 8] = (float)cls_temp[index];
 
     }
 
@@ -454,10 +523,54 @@ void concat_outputs_kernel_nor(float *box_temp, float *score_temp, int *cls_temp
         int index = range_index_rw[i];
         #pragma unroll 4
         for (int j = 0; j < 4; ++j)
-            dst_s_rw[j * nms_post_maxsize + i] = box_temp[j * orign_num + index];
+            dst_s_rw[i * 6 + j] = box_temp[index * 4 + j];
 
-        dst_s_rw[4 * nms_post_maxsize + i] = -score_temp[index];//前面排序时存为负值
-        dst_s_rw[5 * nms_post_maxsize + i] = (float)cls_temp[index];
+        dst_s_rw[i * 6 + 4] = -score_temp[index];//前面排序时存为负值
+        dst_s_rw[i * 6 + 5] = (float)cls_temp[index];
+
+    }
+
+}
+
+__global__
+void concat_outputs_half_kernel_bev(float *box_temp, float *score_temp, int *cls_temp, int *range_index_rw,
+                                 int total_box, int nms_post_maxsize, __half *dst_s_rw, int orign_num)
+{
+
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int i = idx; i < total_box; i += stride)
+    {
+        int index = range_index_rw[i];
+        #pragma unroll 7
+        for (int j = 0; j < 7; ++j)
+            dst_s_rw[i * 9 + j] = __float2half(box_temp[index * 7 + j]);
+
+        dst_s_rw[i * 9 + 7] = __float2half(-score_temp[index]);//前面排序时存为负值
+        dst_s_rw[i * 9 + 8] = __float2half((float)cls_temp[index]);
+
+    }
+
+}
+
+__global__
+void concat_outputs_half_kernel_nor(float *box_temp, float *score_temp, int *cls_temp, int *range_index_rw,
+                                 int total_box, int nms_post_maxsize, __half *dst_s_rw, int orign_num)
+{
+
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int i = idx; i < total_box; i += stride)
+    {
+        int index = range_index_rw[i];
+        #pragma unroll 4
+        for (int j = 0; j < 4; ++j)
+            dst_s_rw[i * 6 + j] = __float2half(box_temp[index * 4 + j]);
+
+        dst_s_rw[i * 6 + 4] = __float2half(-score_temp[index]);//前面排序时存为负值
+        dst_s_rw[i * 6 + 5] = __float2half((float)cls_temp[index]);
 
     }
 
@@ -488,9 +601,9 @@ struct is_neg
 
 void cuda_nms(const float *batch_box, const float *batch_cls_rw, float *score, int *cls_index, int *range_index_rw, int* pos_rw, int *cls_temp, float *box_temp,
     float *ious_rw, float *dst, int num_box, int num_cls, int nms_pre_maxsize, int nms_post_maxsize, float nms_thresh, int batch_size,
-    float score_thresh, int use_bev)
+    float score_thresh, int use_bev, int* validboxes_rw)
 {
-
+    std::vector<int> host_validboxes(batch_size, 0);
     int SMs = 0;
     checkCudaErrors(cudaDeviceGetAttribute(&SMs, cudaDevAttrMultiProcessorCount, 0));
     int num_box_info = use_bev == 0 ? 4 : 7;
@@ -503,7 +616,7 @@ void cuda_nms(const float *batch_box, const float *batch_cls_rw, float *score, i
         int   *pos_s_rw = pos_rw + i;
 
         //挑选每个box中score最大的类，记录类别索引和score；记录box索引，不满足阈值的box，索引记为-1
-        squeeze_for_score_kernel<<<SMs, GetMaxOccupacy(SMs, num_box), sizeof(int)>>>(cls_s_rw, score, cls_index, range_index_rw, pos_s_rw, num_cls, num_box, score_thresh); //提取cls信息和score信息
+        squeeze_for_score_kernel<<<DivUp(num_box, 256), 256, sizeof(int)>>>(cls_s_rw, score, cls_index, range_index_rw, pos_s_rw, num_cls, num_box, score_thresh); //提取cls信息和score信息
 
         int num;
         checkCudaErrors(cudaMemcpy(&num, pos_s_rw, sizeof(int), cudaMemcpyDeviceToHost));
@@ -533,10 +646,64 @@ void cuda_nms(const float *batch_box, const float *batch_cls_rw, float *score, i
         if(use_bev != 0)  concat_outputs_kernel_bev<<<SMs, GetMaxOccupacy(SMs, valid_num)>>>(box_temp, score, cls_temp, range_index_rw, valid_num, nms_post_maxsize, dst_s_rw, num);
         else              concat_outputs_kernel_nor<<<SMs, GetMaxOccupacy(SMs, valid_num)>>>(box_temp, score, cls_temp, range_index_rw, valid_num, nms_post_maxsize, dst_s_rw, num);
 
-
+        host_validboxes[i] = valid_num;
     }
 
-    checkCudaErrors(cudaDeviceSynchronize());
+    checkCudaErrors(cudaMemcpy(validboxes_rw, host_validboxes.data(), sizeof(int) * batch_size, cudaMemcpyHostToDevice));
+
+}
+
+void cuda_nms_fp16(const __half *batch_box, const __half *batch_cls_rw, float *score, int *cls_index, int *range_index_rw, int* pos_rw, int *cls_temp, float *box_temp,
+    float *ious_rw, __half *dst, int num_box, int num_cls, int nms_pre_maxsize, int nms_post_maxsize, float nms_thresh, int batch_size,
+    float score_thresh, int use_bev, int* validboxes_rw)
+{
+    std::vector<int> host_validboxes(batch_size, 0);
+    int SMs = 0;
+    checkCudaErrors(cudaDeviceGetAttribute(&SMs, cudaDevAttrMultiProcessorCount, 0));
+    int num_box_info = use_bev == 0 ? 4 : 7;
+
+    for (int i = 0; i < batch_size; ++i){
+        const __half *cls_s_rw = batch_cls_rw + i * num_box * num_cls;
+        const __half *box_s_rw = batch_box    + i * num_box * num_box_info;
+
+        __half *dst_s_rw = dst + i * nms_post_maxsize * (num_box_info + 2);
+        int   *pos_s_rw = pos_rw + i;
+
+        //挑选每个box中score最大的类，记录类别索引和score；记录box索引，不满足阈值的box，索引记为-1
+        squeeze_for_score_half_kernel<<<DivUp(num_box, 256), 256, sizeof(int)>>>(cls_s_rw, score, cls_index, range_index_rw, pos_s_rw, num_cls, num_box, score_thresh); //提取cls信息和score信息
+
+        int num;
+        checkCudaErrors(cudaMemcpy(&num, pos_s_rw, sizeof(int), cudaMemcpyDeviceToHost));
+        if(num < 1)   continue;
+
+        //将有效的box按照置信度排序,注意，此时score，range_index_rw都是排序的结果
+	    thrust::stable_sort_by_key(thrust::device, score, score + num, range_index_rw);
+
+	    if(num > nms_pre_maxsize) num = nms_pre_maxsize;
+
+        if(use_bev != 0)  copy_to_temp_half_kernel_bev<<<SMs, GetMaxOccupacy(SMs, num)>>>(range_index_rw, score, cls_index, box_s_rw, cls_temp, box_temp, num, num_box, num_box_info);
+        else              copy_to_temp_half_kernel_nor<<<SMs, GetMaxOccupacy(SMs, num)>>>(range_index_rw, score, cls_index, box_s_rw, cls_temp, box_temp, num, num_box, num_box_info);
+
+        if(use_bev != 0)  iou_self_bev_kernel<<<SMs, GetMaxOccupacy(SMs, num * num)>>>(num, box_temp, range_index_rw, ious_rw);
+        else              iou_self_kernel    <<<SMs, GetMaxOccupacy(SMs, num * num)>>>(num, box_temp, range_index_rw, ious_rw);
+
+        range_kernel<<<SMs, GetMaxOccupacy(SMs, num)>>>(range_index_rw, num);// mark temp index
+        nms_func(num, range_index_rw, ious_rw, nms_thresh);
+
+        //聚合索引大于-1的box，为有效box
+        int *new_end = thrust::remove_if(thrust::device, range_index_rw, range_index_rw + num, is_neg());
+        int valid_num = new_end - range_index_rw;
+
+        if(valid_num < 1)   continue;
+        valid_num = valid_num > nms_post_maxsize ? nms_post_maxsize : valid_num;
+
+        if(use_bev != 0)  concat_outputs_half_kernel_bev<<<SMs, GetMaxOccupacy(SMs, valid_num)>>>(box_temp, score, cls_temp, range_index_rw, valid_num, nms_post_maxsize, dst_s_rw, num);
+        else              concat_outputs_half_kernel_nor<<<SMs, GetMaxOccupacy(SMs, valid_num)>>>(box_temp, score, cls_temp, range_index_rw, valid_num, nms_post_maxsize, dst_s_rw, num);
+
+        host_validboxes[i] = valid_num;
+    }
+
+    checkCudaErrors(cudaMemcpy(validboxes_rw, host_validboxes.data(), sizeof(int) * batch_size, cudaMemcpyHostToDevice));
 
 }
 

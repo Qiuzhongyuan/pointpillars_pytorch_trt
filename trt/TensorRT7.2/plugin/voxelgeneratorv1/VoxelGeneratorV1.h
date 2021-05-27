@@ -24,7 +24,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <voxelgeneratev1_nova.h>
+#include <cuda_voxel_generator.h>
 #include <cuda_fp16.h>
 #include <kernel.h>
 #include <thrust/device_ptr.h>

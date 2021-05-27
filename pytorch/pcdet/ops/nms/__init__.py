@@ -1,3 +1,3 @@
-from .nms import NMSDeploy
+from .nms import NMS
 
-__all__ = ['NMSDeploy']
+__all__ = ['NMS']

@@ -1,6 +1,6 @@
 # A TRT Deployment Implementation For PointPillars
 
-This repository is a modified version of [TensorRT](https://github.com/NVIDIA/TensorRT) and  [tiny-tensorrt](https://github.com/zerollzeng/tiny-tensorrt). For deployment of the pointpillars model, we added three plugins (Voxelgenerate, Dense, NMS) to the TensorRT source code. To cater to different precision requirements, we provide three inference modes: FP32, FP16, INT8.
+This repository is a modified version of [TensorRT](https://github.com/NVIDIA/TensorRT) and  [tiny-tensorrt](https://github.com/zerollzeng/tiny-tensorrt). For deployment of the pointpillars model, we added three plugins (Voxelgenerate, Dense, NMS) to the TensorRT source code. To cater to different precision requirements, we provide three inference modes: FP32, FP16.
 
 
 ## Docker
@@ -8,7 +8,7 @@ This repository is a modified version of [TensorRT](https://github.com/NVIDIA/Te
 Prepare a docker container:
 
 ```bash
-$ docker pull nvcr.io/nvidia/tensorrt:21.04-py3
+$ docker pull nvcr.io/nvidia/tensorrt:20.07-py3
 ```
 
 Inside the docker container, run:
@@ -28,7 +28,7 @@ $ make -j12
 $ ./cp.sh
 ```
 
-Set DUSE_FP16=ON for FP32 or INT8 inference mode.
+Set DUSE_FP16=ON for FP16 inference mode.
 
 ## Tiny-TensorRT
 
@@ -49,39 +49,52 @@ Refer to the parameter "MODE" in [test.xml](tiny-tensorrt7.2/test.xml) to select
 ```model(test.xml)
 $ <MODE>0</MODE>    :: fp32
 $ <MODE>1</MODE>    :: fp16
-$ <MODE>2</MODE>    :: int8
 ```
 
 ```bash
-$ ./unit_test --onnx_path ../model/pointpillars.onnx --data_path ../bindata --calibrate_path ../testbin
+$ ./unit_test --onnx_path ../model/pointpillars.onnx --data_path ../bindata
 ```
+Result is saved in "pointpillars_pytorch_trt/trt/tiny-tensorrt7.2/saveint8/".
 
 
 ## Evaluation
 
-We evaluated the performance on a Tesla T4. Inference times (in ms) for the original MultiScale-Head pointpillars model and the pruned version are provided below.
+We evaluated the performance on a **2080 TI**. Inference times (in ms) for the original MultiScale-Head pointpillars model and the pruned version are provided below.
 
-|  | fp32 | fp16 | int8 |
-| :------: | :------: | :------: |:----:|
-| MultiScale model| 58.95 | 25.06 | 29.08 |
-| MultiScale-Pruned model| 20.62 | 14.42 | 15.88 |
+|  | fp32 | fp16 |
+| :------: | :------: | :------: |
+| MultiScale model| 24.84 | 11.71 |
+| MultiScale-Pruned model| 8.97 | 7.62 |
+
+We also evaluated the performance on a **Xavier**.
+
+|  | fp32 | fp16 |
+| :------: | :------: | :------: |
+| MultiScale model| 196.60 | 94.69 |
+| MultiScale-Pruned model| 62.96 | 43.92 |
 
 Furthermore, we tested the average precision in the BEV perspective (BEV AP) for the categories car, pedestrian, cyclist.
 
-| CAR | fp32 | fp16 | int8 |
-| :------: | :------: | :------: |:----:|
-| MultiScale model| 85.24 | 85.51 | 75.78 |
-| MultiScale-Pruned model| 83.83 | 83.23 | 75.03 |
+The test environment is the same as [pytorch](../pytorch) .
+```
+$ cd pointpillars_pytorch_trt/trt/tiny-tensorrt7.2/eval_tools/
+$ python eval_results.py --trt_outputs ../saveint8/ 
+```
 
-| PEDESTRIAN | fp32 | fp16 | int8 |
-| :------: | :------: | :------: |:----:|
-| MultiScale model| 61.51 | 60.88 | 60.16 |
-| MultiScale-Pruned model| 58.77 | 56.27 | 58.05 |
+| CAR | fp32 | fp16 |
+| :------: | :------: | :------: |
+| MultiScale model| 85.24 | 84.84 |
+| MultiScale-Pruned model| 83.83 | 83.79 |
 
-| CYCLIST | fp32 | fp16 | int8 |
-| :------: | :------: | :------: |:----:|
-| MultiScale model| 72.13 | 71.89 | 69.36 |
-| MultiScale-Pruned model| 70.40 | 68.75 | 65.81 |
+| PEDESTRIAN | fp32 | fp16 |
+| :------: | :------: | :------: |
+| MultiScale model| 61.45 | 61.41 |
+| MultiScale-Pruned model| 58.71 | 57.24 |
+
+| CYCLIST | fp32 | fp16 |
+| :------: | :------: | :------: |
+| MultiScale model| 72.48 | 72.02 |
+| MultiScale-Pruned model| 70.35 | 69.54 |
 
 ## Contributors
 

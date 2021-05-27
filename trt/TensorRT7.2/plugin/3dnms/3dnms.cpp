@@ -61,26 +61,35 @@ NMS3D::~NMS3D()
 
 int NMS3D::getNbOutputs() const
 {
-    return 1;
+    return 2;
 }
 
 DimsExprs NMS3D::getOutputDimensions(int index, const DimsExprs* inputs, int nbInputDims, nvinfer1::IExprBuilder& exprBuilder)
-{
-    if (_use_bev){
-        nvinfer1::DimsExprs outdims;
-        outdims.nbDims = 3;
-        outdims.d[0] = exprBuilder.constant(_bs);
-        outdims.d[1] = exprBuilder.constant(9);
-        outdims.d[2] = exprBuilder.constant(_nms_post_maxsize);
-        return outdims;
-    }else{
-        nvinfer1::DimsExprs outdims;
-        outdims.nbDims = 3;
-        outdims.d[0] = exprBuilder.constant(_bs);
-        outdims.d[1] = exprBuilder.constant(6);
-        outdims.d[2] = exprBuilder.constant(_nms_post_maxsize);
-        return outdims;
+{   
+    // printf(" \n ######################## \n");
+    if (index == 0){
+        if (_use_bev){
+            nvinfer1::DimsExprs outdims;
+            outdims.nbDims = 3;
+            outdims.d[0] = exprBuilder.constant(_bs);
+            outdims.d[1] = exprBuilder.constant(_nms_post_maxsize);
+            outdims.d[2] = exprBuilder.constant(9);
+            return outdims;
+        }else{
+            nvinfer1::DimsExprs outdims;
+            outdims.nbDims = 3;
+            outdims.d[0] = exprBuilder.constant(_bs);
+            outdims.d[1] = exprBuilder.constant(_nms_post_maxsize);
+            outdims.d[2] = exprBuilder.constant(6);
+            return outdims;
+        }
+    }else if (index == 1){
+        nvinfer1::DimsExprs valid_boxes;
+        valid_boxes.nbDims = 1;
+        valid_boxes.d[0] = exprBuilder.constant(_bs);
+        return valid_boxes;
     }
+    
     
 }
 
@@ -98,8 +107,8 @@ size_t NMS3D::getWorkspaceSize(const nvinfer1::PluginTensorDesc* inputs, int nbI
     Dims cls_dim = inputs[1].dims;
     Dims batch_box_dims = inputs[0].dims;
     int batch_size = batch_box_dims.d[0];
-    int num_box = batch_box_dims.d[2];
-    int num_cls = cls_dim.d[1];
+    int num_box = batch_box_dims.d[1];
+    int num_cls = cls_dim.d[2];
     int num_out_info;
     if(_use_bev!=0){
         num_out_info = 9;
@@ -108,9 +117,8 @@ size_t NMS3D::getWorkspaceSize(const nvinfer1::PluginTensorDesc* inputs, int nbI
         num_out_info = 6;
     }
     size_t totalsize = sizeof(int)*num_box + sizeof(float)*num_box + sizeof(int)*num_box + sizeof(int)*_nms_pre_maxsize +
-     sizeof(int)*_nms_pre_maxsize*(num_out_info-2) + sizeof(int)*batch_size*2 + sizeof(float)*_nms_pre_maxsize*_nms_pre_maxsize +
-     sizeof(float)*batch_size*_nms_post_maxsize*num_out_info + sizeof(float)*batch_size*num_box*(num_out_info-2) + 
-     sizeof(float)*batch_size*num_box*num_cls;
+     sizeof(int)*_nms_pre_maxsize*(num_out_info-2) + sizeof(int)*batch_size*2 + sizeof(float)*_nms_pre_maxsize*_nms_pre_maxsize;
+
     return totalsize;
 }
 
@@ -123,8 +131,8 @@ int NMS3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     Dims batch_box_dims = inputDesc[0].dims;
     Dims batch_cls_dims = inputDesc[1].dims;
     int batch_size = batch_box_dims.d[0];
-    int num_box = batch_box_dims.d[2];
-    int num_cls = batch_cls_dims.d[1];
+    int num_box = batch_box_dims.d[1];
+    int num_cls = batch_cls_dims.d[2];
 
     int num_out_info;
     if(_use_bev!=0){
@@ -142,12 +150,6 @@ int NMS3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     void* box_temp_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box*2 + + sizeof(int)*_nms_pre_maxsize;
     void* pos_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box*2 + + sizeof(int)*_nms_pre_maxsize + sizeof(int)*_nms_pre_maxsize*(num_out_info-2);
     void* ious_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box*2 + + sizeof(int)*_nms_pre_maxsize + sizeof(int)*_nms_pre_maxsize*(num_out_info-2) + sizeof(int)*_bs*2;
-    void* outfeature_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box*2 + + sizeof(int)*_nms_pre_maxsize + sizeof(int)*_nms_pre_maxsize*(num_out_info-2) + sizeof(int)*_bs*2 + 
-     sizeof(float)*_nms_pre_maxsize*_nms_pre_maxsize;
-    void* batch_box_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box*2 + + sizeof(int)*_nms_pre_maxsize + sizeof(int)*_nms_pre_maxsize*(num_out_info-2) + sizeof(int)*_bs*2 + 
-     sizeof(float)*_nms_pre_maxsize*_nms_pre_maxsize + sizeof(float)*_bs*_nms_post_maxsize*num_out_info;
-    void* batch_cls_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box*2 + + sizeof(int)*_nms_pre_maxsize + sizeof(int)*_nms_pre_maxsize*(num_out_info-2)  + sizeof(int)*_bs*2 + 
-     sizeof(float)*_nms_pre_maxsize*_nms_pre_maxsize + sizeof(float)*_bs*_nms_post_maxsize*num_out_info + sizeof(float)*_bs*num_box*(num_out_info-2);
 
     int* index = static_cast<int*>(index_v);
     float* score = static_cast<float*>(score_v);
@@ -156,20 +158,7 @@ int NMS3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     float* box_temp = static_cast<float*>(box_temp_v);
     int* pos = static_cast<int*>(pos_v);
     float* ious = static_cast<float*>(ious_v);
-    float* outfeature = static_cast<float*>(outfeature_v);
-    float* batch_box = static_cast<float*>(batch_box_v);
-    float* batch_cls = static_cast<float*>(batch_cls_v);
 
-    // LOG_ERROR(cudaMemset(index, 0, sizeof(int)*num_box*batch_size));
-    // LOG_ERROR(cudaMemset(score, 0, sizeof(float)*num_box));
-    // LOG_ERROR(cudaMemset(cls_type, 0, sizeof(int)*num_box));
-    // LOG_ERROR(cudaMemset(cls_temp, 0, sizeof(int)*_nms_pre_maxsize));
-    // LOG_ERROR(cudaMemset(box_temp, 0, sizeof(float)*_nms_pre_maxsize));
-    // LOG_ERROR(cudaMemset(pos, 0, sizeof(int)*batch_size*2));
-    // LOG_ERROR(cudaMemset(ious, 0, sizeof(float)*_nms_pre_maxsize*_nms_pre_maxsize));
-    // LOG_ERROR(cudaMemset(batch_box, 0, sizeof(float)*batch_size*num_box*(num_out_info-2)));
-    // LOG_ERROR(cudaMemset(batch_cls, 0, sizeof(float)*batch_size*num_box*num_cls));
-    // printf("++++++++++++++++++++++++++++++++++++\n\n\n");
     init_int_(index, 0, num_box*batch_size);
     init_zeros(score, 0, num_box*batch_size);
     init_int_(cls_type, 0, num_box);
@@ -177,56 +166,29 @@ int NMS3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     init_zeros(box_temp, 0, _nms_pre_maxsize);
     init_int_(pos, 0, batch_size*2);
     init_zeros(ious, 0, _nms_pre_maxsize*_nms_pre_maxsize);
-    init_zeros(batch_box, 0, batch_size*num_box*(num_out_info-2));
-    init_zeros(batch_cls, 0, batch_size*num_box*num_cls);
 
-    init_zeros(outfeature, -1, batch_size*_nms_post_maxsize*num_out_info);
+    int* validboxes = static_cast<int*>(outputs[1]);
+    LOG_ERROR(cudaMemset(validboxes, 0, sizeof(int)*batch_size));
 
-    // if (DataType::kHALF == inputDesc->type){
 #ifdef USE_FP16
-        //  printf("DataType::kHALF == inputDesc->type\n\n\n\n\n\n");
-        __half const* temp_box = static_cast<__half const*>(inputs[0]);
-        __half const* temp_cls = static_cast<__half const*>(inputs[1]);
-        half2float_custom(temp_box, batch_box, batch_size*num_box*(num_out_info-2));
-        half2float_custom(temp_cls, batch_cls, batch_size*num_box*num_cls);
-    // }else if(DataType::kFLOAT == inputDesc->type||DataType::kINT8 == inputDesc->type){
+        __half const* batch_box = static_cast<__half const*>(inputs[0]);
+        __half const* batch_cls = static_cast<__half const*>(inputs[1]);
+        __half* output_feature = static_cast<__half*>(outputs[0]);
+        init_float_half(output_feature, (__half)(-1.0), _bs*_nms_post_maxsize*num_out_info);
+        NMSSpace::cuda_nms_fp16(batch_box, batch_cls, score, cls_type, index, pos, cls_temp, box_temp,
+                            ious, output_feature, num_box, num_cls, _nms_pre_maxsize, _nms_post_maxsize, 
+                            _nms_thresh, batch_size, _score_thresh, _use_bev, validboxes);
 #else
-        //printf("3dnms:  DataType::kFLOAT32 == inputDesc->type||DataType::kINT8 == inputDesc->type\n\n\n\n\n\n");
-        float const* temp_box = static_cast<float const*>(inputs[0]);
-        float const* temp_cls = static_cast<float const*>(inputs[1]);
-        LOG_ERROR(cudaMemcpy(batch_box, temp_box, sizeof(float)*batch_size*num_box*(num_out_info-2), cudaMemcpyDeviceToDevice));
-        LOG_ERROR(cudaMemcpy(batch_cls, temp_cls, sizeof(float)*batch_size*num_box*num_cls, cudaMemcpyDeviceToDevice));
-    // }
+        float const* batch_box = static_cast<float const*>(inputs[0]);
+        float const* batch_cls = static_cast<float const*>(inputs[1]);
+        float* output_feature = static_cast<float*>(outputs[0]);
+        init_zeros(output_feature, -1.0, _bs*_nms_post_maxsize*num_out_info);
+        NMSSpace::cuda_nms(batch_box, batch_cls, score, cls_type, index, pos, cls_temp, box_temp,
+                            ious, output_feature, num_box, num_cls, _nms_pre_maxsize, _nms_post_maxsize, _nms_thresh, 
+                            batch_size, _score_thresh, _use_bev, validboxes);
+
 #endif
 
-    
-    NMSSpace::cuda_nms(batch_box, batch_cls, score, cls_type, index, pos, cls_temp, box_temp, ious, outfeature, num_box,
-     num_cls, _nms_pre_maxsize, _nms_post_maxsize, _nms_thresh, batch_size, _score_thresh, _use_bev);
-
- #ifdef USE_FP16
-        __half *outfeat = static_cast<__half *>(outputs[0]);
-        float2half_custom(outfeature, outfeat, batch_size*_nms_post_maxsize*num_out_info);
-#else
-        float *outfeat = static_cast<float *>(outputs[0]);
-        LOG_ERROR(cudaMemcpy(outfeat, outfeature, sizeof(float)*batch_size*_nms_post_maxsize*num_out_info, cudaMemcpyDeviceToDevice));
-#endif
-
-    // LOG_ERROR(cudaFree(batch_box));
-    // LOG_ERROR(cudaFree(batch_cls));
-    // LOG_ERROR(cudaFree(outfeature));
-    
-
-    // LOG_ERROR(cudaFree(index));
-    // LOG_ERROR(cudaFree(score));
-    // LOG_ERROR(cudaFree(cls_type));
-    // LOG_ERROR(cudaFree(cls_temp));
-    // LOG_ERROR(cudaFree(box_temp));
-    // LOG_ERROR(cudaFree(score_temp));
-    // LOG_ERROR(cudaFree(ious));
-    cudaDeviceSynchronize();
-    //auto t10=std::chrono::steady_clock::now();
-    //double engine_ms=std::chrono::duration<double,std::milli>(t10-t1).count();
-    //std::cout << "********* NMS all time is: " << engine_ms << std::endl;
     return 0;
 }
 
@@ -251,8 +213,8 @@ bool NMS3D::supportsFormatCombination(
     int pos, const nvinfer1::PluginTensorDesc* inOut, int nbInputs, int nbOutputs)
 {
     ASSERT(inOut && pos < (nbInputs + nbOutputs));
-    return ((inOut[pos].type == nvinfer1::DataType::kFLOAT || inOut[pos].type == nvinfer1::DataType::kHALF)
-        && inOut[pos].format == nvinfer1::PluginFormat::kNCHW && inOut[pos].type == inOut[0].type);
+    return ((inOut[pos].type == nvinfer1::DataType::kFLOAT || inOut[pos].type == nvinfer1::DataType::kHALF  || inOut[pos].type == nvinfer1::DataType::kINT32)
+        && inOut[pos].format == nvinfer1::PluginFormat::kNCHW); // && inOut[pos].type == inOut[0].type);
 }
 
 const char* NMS3D::getPluginType() const
@@ -292,7 +254,11 @@ const char* NMS3D::getPluginNamespace() const
 // Return the DataType of the plugin output at the requested index
 DataType NMS3D::getOutputDataType(int index, const nvinfer1::DataType* inputTypes, int nbInputs) const
 {
-    return DataType::kFLOAT;
+    if (index == 0){
+        return DataType::kFLOAT;
+    }else{
+        return DataType::kINT32;
+    }
 }
 
 // Attach the plugin object to an execution context and grant the plugin the access to some context resource.
@@ -307,7 +273,7 @@ void NMS3D::detachFromContext() {}
 void NMS3D::configurePlugin(const nvinfer1::DynamicPluginTensorDesc* in, int nbInputs, 
                         const nvinfer1::DynamicPluginTensorDesc* out, int nbOutputs)
 {
-    ASSERT(nbOutputs == 1);
+    ASSERT(nbOutputs == 2);
 }
 
 

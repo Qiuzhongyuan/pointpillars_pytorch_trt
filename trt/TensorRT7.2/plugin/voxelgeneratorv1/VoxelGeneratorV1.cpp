@@ -123,12 +123,18 @@ size_t VoxelGeneratorV1::getWorkspaceSize(const nvinfer1::PluginTensorDesc* inpu
     for (int i=0; i < 3;i++){
         grid_size[i] = round((_point_cloud_range[3 + i] - _point_cloud_range[i]) / _voxel_size[i]);
     }
-    int batchRowOffset = grid_size[0]*grid_size[1] + 1;
+    
+    float bev_map = (float)(grid_size[0] * grid_size[1] * sizeof(float)) / 1024 / 1024;
+    int value_map_z = 40.0 / bev_map;//限制映射图的尺寸，超过40M只用一层
+
+    value_map_z = std::max(value_map_z, 1);
+    value_map_z = std::min(value_map_z, grid_size[2]);
+    int mapsize = grid_size[0] * grid_size[1] * value_map_z;
 
     Dims indim = inputs[0].dims;
     size_t N = indim.d[0];
     
-    size_t totalSize = sizeof(int)*N + _batch_size*sizeof(int)*batchRowOffset + _batch_size*sizeof(int)*_max_voxels;
+    size_t totalSize = _batch_size*sizeof(int)*mapsize + _batch_size*sizeof(int)*_max_voxels;
     return totalSize;
 }
 
@@ -138,52 +144,26 @@ int VoxelGeneratorV1::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
 {    
     cudaDeviceSynchronize();
     //auto t1=std::chrono::steady_clock::now();
-
-    /*if (DataType::kHALF == inputDesc->type){
-        printf("-------------fp16--------------\n");
-    }
-
-    DataType pD = inputDesc[0].type;
-    DataType vD = inputDesc[1].type;
-
-
-    if (DataType::kHALF == pD){
-        printf(" points is half\n");
-    }else if (DataType::kFLOAT == pD){
-        printf(" points is float\n");
-    }
-
-    if (DataType::kHALF == vD){
-        printf(" vD is half\n");
-    }else if (DataType::kINT32 == vD){
-        printf(" vD is int32\n");
-    }*/
     
     int const* ValidInput = static_cast<int const*>(inputs[1]);
     
-    Dims outdims0 = outputDesc[0].dims;
-    Dims outdims1 = outputDesc[1].dims;
-
     Dims points_dim = inputDesc[0].dims;
     int N = points_dim.d[0];
     int inCols = points_dim.d[1];
     int num_features = inCols-1;
-    
+
 	int outCols = num_features;
     if(_center_offset!=0) outCols +=3;
 	if(_cluster_offset!=0){
 	    outCols +=3;
 	}
     
-    int grid_size[3];
+    std::vector<int> grid_size(3);
     for (int i=0; i < 3;i++){
         grid_size[i] = round((_point_cloud_range[3 + i] - _point_cloud_range[i]) / _voxel_size[i]);
     }
-    int _total_voxel = grid_size[0]*grid_size[1]*grid_size[2];
 
     int cuda_idx = 0;
-    // auto options = torch::TensorOptions({at::kCUDA, cuda_idx}).dtype(torch::kInt32);
-
 
     int *coors = static_cast<int*>(outputs[1]);
     int *num_points_per_voxel = static_cast<int*>(outputs[2]);
@@ -192,73 +172,59 @@ int VoxelGeneratorV1::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     init_int_(coors, -1, _max_voxels*_batch_size*4);
     init_int_(num_points_per_voxel, 0, _max_voxels*_batch_size);
     init_int_(ValidOutput, 0, _batch_size);
-    // thrust::fill(coors, coors+_max_voxels*_batch_size*4, -1); // thrust::device, 
-    // thrust::fill(num_points_per_voxel, num_points_per_voxel+_max_voxels*_batch_size, 0);
-    // thrust::fill(ValidOutput, ValidOutput+_batch_size, 0);
 
-    // torch::Tensor prob_voxel_index = torch::zeros({N, }, options) - 1; //init -1
+    float bev_map = (float)(grid_size[0] * grid_size[1] * sizeof(float)) / 1024 / 1024;
+    int value_map_z = 40.0 / bev_map;//限制映射图的尺寸，超过40M只用一层
+
+    value_map_z = std::max(value_map_z, 1);
+    value_map_z = std::min(value_map_z, grid_size[2]);
+    int mapsize = grid_size[0] * grid_size[1] * value_map_z;
+
 
     //for CSR
-    const int batchRowOffset = grid_size[0]*grid_size[1] + 1;
 
-    void* prob_voxel_index_v = workspace;
-    void* TensorRowOffset_v = workspace + sizeof(int)*N;
-    void* TensorColunms_v = workspace + sizeof(int)*N + sizeof(int)*batchRowOffset*_batch_size;
+    void* map_tensor_v = workspace;
+    void* addr_tensor_v = workspace + sizeof(int)*mapsize*_batch_size;
 
-    int* prob_voxel_index_ptr = static_cast<int*>(prob_voxel_index_v);
-    int* TensorRowOffsetPtr = static_cast<int*>(TensorRowOffset_v);
-    int* TensorColumnsPtr = static_cast<int*>(TensorColunms_v);
+    int* map_tensor = static_cast<int*>(map_tensor_v);
+    int* addr_tensor = static_cast<int*>(addr_tensor_v);
 
-    init_int_(prob_voxel_index_ptr, -1, N);
-    init_int_(TensorRowOffsetPtr, 0, batchRowOffset*_batch_size);
-    init_int_(TensorColumnsPtr, 0, _max_voxels*_batch_size);
-    // thrust::fill(TensorRowOffsetPtr, TensorRowOffsetPtr+batchRowOffset*_batch_size, 0);
-    // thrust::fill(TensorColumnsPtr, TensorColumnsPtr+_max_voxels*_batch_size, 0);
+    init_int_(map_tensor, -1, _batch_size*mapsize);
+    init_int_(addr_tensor, -1, _batch_size*_max_voxels);
 
-    // if (DataType::kHALF == inputDesc[0].type){
+    const int listBytes = N * sizeof(VoxelGeneratorSpace::HashEntry);
+    int* list_tensor = nullptr;
+    LOG_ERROR(cudaMalloc((void**)&list_tensor, sizeof(int)*(listBytes/4)));
+    LOG_ERROR(cudaMemset(list_tensor, 0, sizeof(int)*(listBytes/4)));
+    VoxelGeneratorSpace::HashEntry* list_tensor_rw = reinterpret_cast<VoxelGeneratorSpace::HashEntry*>(list_tensor);
+
+
 #ifdef USE_FP16
         __half const* points = static_cast<__half const*>(inputs[0]);
         __half* voxels = static_cast<__half*>(outputs[0]);
-        // __half const* points = (__half const*)inputs[0];
-        // __half *voxels = (__half*)outputs[0];
-        // init_temp<__half>(voxels, 0.0, _max_voxels*_batch_size*_max_num_points*outCols);
         init_float_half(voxels, (__half)0.0, _max_voxels*_batch_size*_max_num_points*outCols);
-        VoxelGeneratorV1Space::cuda_points_to_voxel_fp16(points, ValidInput, prob_voxel_index_ptr,
-                             coors, voxels, num_points_per_voxel, ValidOutput,
-                             grid_size[0], grid_size[1], grid_size[2],
-                             (__half)_point_cloud_range[0], (__half)_point_cloud_range[1], (__half)_point_cloud_range[2],
-                             (__half)_voxel_size[0], (__half)_voxel_size[1], (__half)_voxel_size[2],
-                             _batch_size, N, inCols, _max_voxels, _max_num_points,
-                             TensorRowOffsetPtr, TensorColumnsPtr,
-                             _cluster_offset, _center_offset, _supplement, cuda_idx);
+        VoxelGeneratorSpace::cuda_points_to_voxel_fp16(points, ValidInput,
+                                            coors, num_points_per_voxel, voxels, ValidOutput,
+                                            map_tensor, addr_tensor, list_tensor_rw,
+                                            _point_cloud_range, _voxel_size, grid_size,
+                                            _batch_size, N, inCols, outCols,
+                                            _cluster_offset, _center_offset, _supplement, _max_voxels, 
+                                            _max_num_points, value_map_z);
 #else
+
         float const* points = static_cast<float const*>(inputs[0]);
         float *voxels = static_cast<float*>(outputs[0]);
         init_float(voxels, 0.0, _max_voxels*_batch_size*_max_num_points*outCols);
-        VoxelGeneratorV1Space::cuda_points_to_voxel(points, ValidInput, prob_voxel_index_ptr,
-                             coors, voxels, num_points_per_voxel, ValidOutput,
-                             grid_size[0], grid_size[1], grid_size[2],
-                             _point_cloud_range[0], _point_cloud_range[1], _point_cloud_range[2],
-                             _voxel_size[0], _voxel_size[1], _voxel_size[2],
-                             _batch_size, N, inCols, _max_voxels, _max_num_points,
-                             TensorRowOffsetPtr, TensorColumnsPtr,
-                             _cluster_offset, _center_offset, _supplement, cuda_idx);
+        VoxelGeneratorSpace::cuda_points_to_voxel(points, ValidInput,
+                                                   coors, num_points_per_voxel, voxels, ValidOutput,
+                                                   map_tensor, addr_tensor, list_tensor_rw,
+                                                   _point_cloud_range, _voxel_size, grid_size,
+                                                   _batch_size, N, inCols, outCols,
+                                                   _cluster_offset, _center_offset, _supplement, _max_voxels, 
+                                                   _max_num_points, value_map_z);
 #endif
-
-    // size_t allsize = _max_voxels*_batch_size*_max_num_points*outCols;
-    // float* points_h = (float*)malloc(sizeof(int)*allsize);
-    // // LOG_ERROR(cudaMallocHost((void**) &points_h, sizeof(int)*num_outshape_vol*batchSize));
-    // cudaMemcpy(points_h, voxels, sizeof(int)*allsize, cudaMemcpyDeviceToHost);
-    // for (int i =0; i<1000;i++){
-    //     std::cout << " ^ " << points_h[i] << " & ";
-    // }
-    // free(points_h);
-    // std::cout << " \n ---------------- " << std::endl;
-
+    LOG_ERROR(cudaFree(list_tensor));
     cudaDeviceSynchronize();
-    //auto t10=std::chrono::steady_clock::now();
-    //double engine_ms=std::chrono::duration<double,std::milli>(t10-t1).count();
-    //std::cout << "********* VoxelGeneratorV1 time is: " << engine_ms << std::endl;
     return 0;
 }
 

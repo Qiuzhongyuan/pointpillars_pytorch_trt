@@ -122,7 +122,7 @@ if __name__ == '__main__':
                 sources=[
                     'src/voxel_generator.cpp',
                     'src/cuda_voxel_generator.cu',
-                    'src/cuda_voxel_generator_fp16.cu',
+                    'src/gpu_hash_map.cu',
                     'src/voxel_generator_api.cpp',
                 ],
             ),

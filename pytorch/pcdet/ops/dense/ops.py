@@ -5,6 +5,7 @@ from . import dense_cuda
 class DenseFunction(Function):
     @staticmethod
     def forward(ctx, features, coords, batch_size, spatialShape):
+        features = features.contiguous()
         assert features.dim()== 2
         assert coords.dim() == 2 and  coords.size(1) == 4
         ctx.save_for_backward(coords)

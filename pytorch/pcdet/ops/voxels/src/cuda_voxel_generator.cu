@@ -1,378 +1,359 @@
-#include "cuda_voxel_generator.h"
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 #include <iostream>
 #include <vector>
-#include <algorithm>
-#include "cub-1.8.0/cub/cub.cuh"
+#include "cuda_voxel_generator.h"
 
 namespace NAMESPACE
 {
-
 __global__
-void OutputCoords(int* outCoor, int* Index,
-                      int oX, int oY, int oZ,
-                      int maxValidOutput, int realNum, int N,
-                      float sample_stride, int batch_idx)
+void SupplementVoxelsKernel(float* outVoxels, int* devValidOutputPoints, int* dCounter,
+                            int max_points, int maxValidOutput, int batchSize, int outCols)
 {
-    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+    int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    int stride = gridDim.x * blockDim.x;
 
-    for(int i = idx; i < N; i += stride)
+    for(int i = idx ; i < batchSize * maxValidOutput * max_points; i += stride)
     {
-        int idxS;
-        if(realNum<=maxValidOutput)
-            idxS = i;
-        else{
-            float idFLT = i * sample_stride;
-            idxS = __float2int_rd(idFLT);
-        }
-        int id = Index[idxS];
-        int4* outBuff = reinterpret_cast<int4*>(outCoor);
+        int cur_batch = i / (maxValidOutput * max_points);
+        int cur_voxel = (i % (maxValidOutput * max_points)) / max_points;
+        int cur_point = (i % (maxValidOutput * max_points)) % max_points;
+        if(cur_voxel >= dCounter[cur_batch] || cur_point < devValidOutputPoints[cur_batch * maxValidOutput + cur_voxel]) continue;
 
-        int4 coor;
-        coor.x = batch_idx;
-        coor.y = (id % (oY * oZ)) % oZ;
-        coor.z = (id % (oY * oZ)) / oZ;
-        coor.w =  id / (oY * oZ);
-        outBuff[i] = coor;
-
-    }
-}
-
-__global__
-void computeRowOffsetOA(int* outCoords, int* RO, int oY, int N)
-{
-    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for(int i = idx; i < N; i += stride)
-    {
-        int4 coor = reinterpret_cast<int4*>(outCoords)[i]; // bs,ZYX
-        int row = coor.w * oY + coor.z;
-#ifdef USE_TORCH
-        atomicAdd(RO + row + 1, 1);
-#else
-        atomicAdd(RO + row, 1);
-#endif
-    }
-}
-
-__global__
-void computeColumnIdx(int* columnIdx, int*RO, int* outCoords,
-                      int oY, int oX, int N)
-{
-    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for(int i = idx; i < N; i += stride)
-    {
-        int4 coor  = reinterpret_cast<int4*>(outCoords)[i];
-        columnIdx[i] = coor.y;
-    }
-}
-
-__global__
-void TraverseInputPointsPerBatch(const float* inPoints, int numPointsPerBatchInput,
-                                 int* outPosIndexBuff, int* dCounter,
-                                 int GridX, int GridY, int GridZ,
-                                 float RangeMinX, float RangeMinY, float RangeMinZ,
-                                 float VoxelSizeX, float VoxelSizeY, float VoxelSizeZ,
-                                 int inCols, const int numValidPointsInput)
-{
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for(int i = idx; i < numValidPointsInput; i += stride)
-    {
-        const float *point = inPoints + i * inCols;
-        int bs = __float2int_rd(point[0] + DELTA);
-        int x  = __float2int_rd((point[1] - RangeMinX) / VoxelSizeX);
-        int y  = __float2int_rd((point[2] - RangeMinY) / VoxelSizeY);
-        int z  = __float2int_rd((point[3] - RangeMinZ) / VoxelSizeZ);
-        if(bs<0 || x<0 || y<0 || z<0 || x>=GridX || y>=GridY || z>=GridZ) continue;
-
-        int pos = atomicAdd(dCounter, 1);
-        outPosIndexBuff[pos] = x * GridZ * GridY + y * GridZ + z; //XYZ
-    }
-
-}
-
-__global__
-void GetVoxelPerBatch(const float* inPoints, float* outVoxels, int* numPerVoxel,
-                         int* RO, int* CI,
-                         int GridX, int GridY, int GridZ,
-                         float RangeMinX, float RangeMinY, float RangeMinZ,
-                         float VoxelSizeX, float VoxelSizeY, float VoxelSizeZ,
-                         int inCols, int outCols, int numValidPointsInput, int maxPointsPerVoxel)
-{
-    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for(int i = idx; i < numValidPointsInput; i += stride)
-    {
-        const float *point = inPoints + i * inCols;
-        int bs = __float2int_rd(point[0] + DELTA);
-        int x  = __float2int_rd((point[1] - RangeMinX) / VoxelSizeX);
-        int y  = __float2int_rd((point[2] - RangeMinY) / VoxelSizeY);
-        int z  = __float2int_rd((point[3] - RangeMinZ) / VoxelSizeZ);
-
-        if(bs<0 || x<0 || y<0 || z<0 || x>=GridX || y>=GridY || z>=GridZ) continue;
-
-        const int row = x * GridY + y;
-        int offset = Access(RO, CI, row, z);
-        if(offset<0) continue;
-
-        float* voxel = outVoxels + offset * outCols * maxPointsPerVoxel;
-        int old_num = atomicAdd(&numPerVoxel[offset], 1);
-
-        if(old_num<maxPointsPerVoxel)
+        float* cur_outVoxel = outVoxels + (cur_batch * maxValidOutput + cur_voxel) * max_points * outCols;
+        for(int j = 0 ; j < outCols; ++j)
         {
-            float* voxel_temp = voxel + old_num * outCols;
-            #pragma unroll
-            for(int j = 0; j < inCols-1; ++j) voxel_temp[j] = point[j+1];
+            cur_outVoxel[cur_point * outCols + j] = cur_outVoxel[j];
         }
-        else{
-            atomicSub(&numPerVoxel[offset], 1);
-        }
-
     }
 }
 
-__global__
-void GetVoxelSupplementPerBatch(float* Voxels, int* numPerVoxel, int numValidVoxelsOutput, int cols, int maxPointsPerVoxel)
-{
-    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
 
-    for(int i = idx; i < numValidVoxelsOutput; i += stride)
+__global__
+void ExtractValidOutVoxelKernel(const float* inPoints, int* map_addr, int* map, HashEntry* list, int* devValidOutputCoors, float* outVoxels,
+                                int* outCoors, int* devValidOutputPoints, int batchSize, int inCols, int outCols, int maxInputPoints, int maxValidOutput,
+                                int cluster_offset, int center_offset, int supplement, int max_points,
+                                float vsizeX, float vsizeY, float vsizeZ,
+                                float rangeMinX, float rangeMinY, float rangeMinZ)
+{
+    int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    int stride = gridDim.x * blockDim.x;
+
+    for(int i = idx ; i < batchSize * maxValidOutput; i += stride)
     {
-        int numpoints = numPerVoxel[i];
-        if(numpoints<maxPointsPerVoxel){
-            float* voxel = Voxels + i * cols * maxPointsPerVoxel;
-            #pragma unroll
-            for(int j = numpoints; j < maxPointsPerVoxel; ++j)
+        const int curBatch = i / maxValidOutput;
+
+        int hash_addr = map_addr[i];
+        if(hash_addr<0) continue;
+
+        int4* outCoorsBatch = ((int4*)outCoors) + curBatch * maxValidOutput;
+        float* outVoxelsBatch = outVoxels + curBatch * maxValidOutput * max_points * outCols;
+        int* devValidOutputPointsBatch = devValidOutputPoints + curBatch * maxValidOutput;
+
+        int entry_idx = map[hash_addr];
+        while(entry_idx >= 0) {
+            HashEntry* entry = list + entry_idx;
+            if((entry->intCoor).y >= 0)
             {
-                float* voxel_temp = voxel + cols * j;
-                #pragma unroll
-                for(int k = 0; k < cols; ++k) voxel_temp[k] = voxel[k];
+                int old_num = atomicAdd(devValidOutputCoors + curBatch, 1);
+                if(old_num >= maxValidOutput)
+                {
+                    devValidOutputCoors[curBatch] = maxValidOutput;
+                    break;
+                }
+
+                int4* outCoors_cur = outCoorsBatch + old_num;
+                float* outVoxels_cur = outVoxelsBatch + old_num * outCols * max_points;
+
+                outCoors_cur -> x = curBatch;
+                outCoors_cur -> y = (entry->intCoor).y;
+                outCoors_cur -> z = (entry->intCoor).z;
+                outCoors_cur -> w = (entry->intCoor).w;
+
+                int num = 1;
+                for(int j = 0; j < (inCols - 1); ++j)
+                    outVoxels_cur[j] = inPoints[entry_idx * inCols + j + 1];
+
+                int next_idx = entry->nextId;
+                while(next_idx >= 0)
+                {
+                    HashEntry* entry_next = list + next_idx;
+                    if((entry_next->intCoor).y == (entry->intCoor).y)
+                    {
+                        (entry_next->intCoor).y = -1;
+                        if(num < max_points)
+                        {
+                            for(int j = 0; j < inCols - 1; ++j)
+                                outVoxels_cur[num * outCols + j] = inPoints[next_idx * inCols + j + 1];
+                            num += 1;
+                        }
+                    }
+                    next_idx = entry_next -> nextId;
+                }
+
+                int offset = 0;
+                if(cluster_offset != 0)
+                {
+                    offset = 3;
+
+                    float sum = 0.0;
+                    for(int k = 0; k < num; ++k)
+                        sum += outVoxels_cur[k * outCols];
+                    float mean = sum / (float)num;
+                    for(int k = 0; k < num; ++k)
+                        outVoxels_cur[k * outCols + inCols -1] = (outVoxels_cur[k * outCols] - mean) / vsizeX;
+
+                    sum = 0.0;
+                    for(int k = 0; k < num; ++k)
+                        sum += outVoxels_cur[k * outCols + 1];
+                    mean = sum / (float)num;
+                    for(int k = 0; k < num; ++k)
+                        outVoxels_cur[k * outCols + inCols] = (outVoxels_cur[k * outCols + 1] - mean) / vsizeY;
+
+                    sum = 0.0;
+                    for(int k = 0; k < num; ++k)
+                        sum += outVoxels_cur[k * outCols + 2];
+                    mean = sum / (float)num;
+                    for(int k = 0; k < num; ++k)
+                        outVoxels_cur[k * outCols + inCols + 1] = (outVoxels_cur[k * outCols + 2] - mean) / vsizeZ;
+
+                }
+                if(center_offset != 0)
+                {
+                    float center_x = rangeMinX + ((float)(outCoors_cur -> w) + 0.5) * vsizeX;
+                    float center_y = rangeMinY + ((float)(outCoors_cur -> z) + 0.5) * vsizeY;
+                    float center_z = rangeMinZ + ((float)(outCoors_cur -> y) + 0.5) * vsizeZ;
+                    for(int k = 0; k < num; ++k)
+                    {
+                        outVoxels_cur[k * outCols + inCols - 1 + offset] = (outVoxels_cur[k * outCols    ] - center_x) / vsizeX;
+                        outVoxels_cur[k * outCols + inCols     + offset] = (outVoxels_cur[k * outCols + 1] - center_y) / vsizeY;
+                        outVoxels_cur[k * outCols + inCols + 1 + offset] = (outVoxels_cur[k * outCols + 2] - center_z) / vsizeZ;
+                    }
+                }
+                //if(supplement != 0) //too slow
+                //{
+                //    for(int k = num; k < max_points; ++k)
+                //        for(int l = 0; l < outCols; ++l)
+                //            outVoxels_cur[k * outCols + l] = outVoxels_cur[l];
+                //}
+                devValidOutputPointsBatch[old_num] = num;
             }
+            entry_idx = entry->nextId;
         }
     }
 }
+
 
 __global__
-void ExtendVoxelClusterOffsetPerBatch(float* Voxels, int* numPerVoxel, int numValidVoxelsOutput,
-                                      float VoxelSizeX, float VoxelSizeY, float VoxelSizeZ,
-                                      int cols, int write_offset, int maxPointsPerVoxel)
+void SupplementVoxelsHalfKernel(__half* outVoxels, int* devValidOutputPoints, int* dCounter,
+                            int max_points, int maxValidOutput, int batchSize, int outCols)
 {
-    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+    int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    int stride = gridDim.x * blockDim.x;
 
-    for(int i = idx; i < numValidVoxelsOutput; i += stride)
+    for(int i = idx ; i < batchSize * maxValidOutput * max_points; i += stride)
     {
-        int numpoints = numPerVoxel[i];
-        if(numpoints<2) continue;
-        float* voxel = Voxels + i * cols * maxPointsPerVoxel;
-        float resolution[] = {VoxelSizeX, VoxelSizeY, VoxelSizeZ};
-        for(int j = 0; j < 3; ++j){
-            float sum=0.0;
-            for(int k = 0; k < numpoints; ++k) sum += voxel[k*cols + j];
+        int cur_batch = i / (maxValidOutput * max_points);
+        int cur_voxel = (i % (maxValidOutput * max_points)) / max_points;
+        int cur_point = (i % (maxValidOutput * max_points)) % max_points;
+        if(cur_voxel >= dCounter[cur_batch] || cur_point < devValidOutputPoints[cur_batch * maxValidOutput + cur_voxel]) continue;
 
-            float mean_v = sum / numpoints;
-            for(int k = 0; k < numpoints; ++k)
-                voxel[k*cols + write_offset + j] = (voxel[k*cols + j] - mean_v) / resolution[j];
+        __half* cur_outVoxel = outVoxels + (cur_batch * maxValidOutput + cur_voxel) * max_points * outCols;
+        for(int j = 0 ; j < outCols; ++j)
+        {
+            cur_outVoxel[cur_point * outCols + j] = cur_outVoxel[j];
         }
     }
 }
+
 
 __global__
-void ExtendVoxelCenterOffsetPerBatch(float* Voxels, int* Coords, int* numPerVoxel, int numValidVoxelsOutput,
-                                     float RangeMinX, float RangeMinY, float RangeMinZ,
-                                     float VoxelSizeX, float VoxelSizeY, float VoxelSizeZ,
-                                     int cols, int write_offset, int maxPointsPerVoxel)
+void ExtractValidOutVoxelHalfKernel(const __half* inPoints, int* map_addr, int* map, HashEntry* list, int* devValidOutputCoors, __half* outVoxels,
+                                    int* outCoors, int* devValidOutputPoints, int batchSize, int inCols, int outCols, int maxInputPoints, int maxValidOutput,
+                                    int cluster_offset, int center_offset, int supplement, int max_points,
+                                    float vsizeX, float vsizeY, float vsizeZ,
+                                    float rangeMinX, float rangeMinY, float rangeMinZ)
 {
-    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+    int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    int stride = gridDim.x * blockDim.x;
 
-    for(int i = idx; i < numValidVoxelsOutput; i += stride)
+    for(int i = idx ; i < batchSize * maxValidOutput; i += stride)
     {
-        int numpoints = numPerVoxel[i];
-        float* voxel = Voxels + i * cols * maxPointsPerVoxel;
-        int* coor  = Coords + i*4; //bs,zyx
+        const int curBatch = i / maxValidOutput;
 
-        float resolution[] = {VoxelSizeX, VoxelSizeY, VoxelSizeZ};
-        float rangemin[] = {RangeMinX, RangeMinY, RangeMinZ};
-        for(int j = 0; j < numpoints; ++j){
-            for(int k = 0; k < 3; ++k){
-                float center = ((float)coor[3-k] + 0.5) * resolution[k] + rangemin[k];
-                voxel[j*cols + write_offset + k] = (voxel[j*cols + k] - center) / resolution[k];
+        int hash_addr = map_addr[i];
+        if(hash_addr<0) continue;
+
+        int4* outCoorsBatch = ((int4*)outCoors) + curBatch * maxValidOutput;
+        __half* outVoxelsBatch = outVoxels + curBatch * maxValidOutput * max_points * outCols;
+        int* devValidOutputPointsBatch = devValidOutputPoints + curBatch * maxValidOutput;
+
+        int entry_idx = map[hash_addr];
+        while(entry_idx >= 0) {
+            HashEntry* entry = list + entry_idx;
+            if((entry->intCoor).y >= 0)
+            {
+                int old_num = atomicAdd(devValidOutputCoors + curBatch, 1);
+                if(old_num >= maxValidOutput)
+                {
+                    devValidOutputCoors[curBatch] = maxValidOutput;
+                    break;
+                }
+
+                int4* outCoors_cur = outCoorsBatch + old_num;
+                __half* outVoxels_cur = outVoxelsBatch + old_num * outCols * max_points;
+
+                outCoors_cur -> x = curBatch;
+                outCoors_cur -> y = (entry->intCoor).y;
+                outCoors_cur -> z = (entry->intCoor).z;
+                outCoors_cur -> w = (entry->intCoor).w;
+
+                int num = 1;
+                for(int j = 0; j < (inCols - 1); ++j)
+                    outVoxels_cur[j] = inPoints[entry_idx * inCols + j + 1];
+
+                int next_idx = entry->nextId;
+                while(next_idx >= 0)
+                {
+                    HashEntry* entry_next = list + next_idx;
+                    if((entry_next->intCoor).y == (entry->intCoor).y)
+                    {
+                        (entry_next->intCoor).y = -1;
+                        if(num < max_points)
+                        {
+                            for(int j = 0; j < inCols - 1; ++j)
+                                outVoxels_cur[num * outCols + j] = inPoints[next_idx * inCols + j + 1];
+                            num += 1;
+                        }
+                    }
+                    next_idx = entry_next -> nextId;
+                }
+
+                int offset = 0;
+                if(cluster_offset != 0)
+                {
+                    offset = 3;
+
+                    __half sum = __float2half(0.0f);
+                    for(int k = 0; k < num; ++k)
+                        sum = __hadd(sum, outVoxels_cur[k * outCols]);
+                    __half mean = __hmul(sum, __float2half(1 / (float)num));
+                    for(int k = 0; k < num; ++k)
+                        outVoxels_cur[k * outCols + inCols -1] = __hmul(__hsub(outVoxels_cur[k * outCols], mean), __float2half(1 / vsizeX));
+
+                    sum = __float2half(0.0f);
+                    for(int k = 0; k < num; ++k)
+                        sum = __hadd(sum, outVoxels_cur[k * outCols + 1]);
+                    mean = __hmul(sum, __float2half(1 / (float)num));
+                    for(int k = 0; k < num; ++k)
+                        outVoxels_cur[k * outCols + inCols] = __hmul(__hsub(outVoxels_cur[k * outCols + 1], mean), __float2half(1 / vsizeY));
+
+                    sum = __float2half(0.0f);
+                    for(int k = 0; k < num; ++k)
+                        sum = __hadd(sum, outVoxels_cur[k * outCols + 2]);
+                    mean = __hmul(sum, __float2half(1 / (float)num));
+                    for(int k = 0; k < num; ++k)
+                        outVoxels_cur[k * outCols + inCols + 1] = __hmul(__hsub(outVoxels_cur[k * outCols + 2], mean), __float2half(1 / vsizeZ));
+
+                }
+                if(center_offset != 0)
+                {
+                    __half center_x = __float2half(rangeMinX + ((float)(outCoors_cur -> w) + 0.5) * vsizeX);
+                    __half center_y = __float2half(rangeMinY + ((float)(outCoors_cur -> z) + 0.5) * vsizeY);
+                    __half center_z = __float2half(rangeMinZ + ((float)(outCoors_cur -> y) + 0.5) * vsizeZ);
+                    for(int k = 0; k < num; ++k)
+                    {
+                        outVoxels_cur[k * outCols + inCols - 1 + offset] = __hmul(__hsub(outVoxels_cur[k * outCols    ], center_x), __float2half(1 / vsizeX));
+                        outVoxels_cur[k * outCols + inCols     + offset] = __hmul(__hsub(outVoxels_cur[k * outCols + 1], center_y), __float2half(1 / vsizeY));
+                        outVoxels_cur[k * outCols + inCols + 1 + offset] = __hmul(__hsub(outVoxels_cur[k * outCols + 2], center_z), __float2half(1 / vsizeZ));
+                    }
+                }
+
+                devValidOutputPointsBatch[old_num] = num;
             }
+            entry_idx = entry->nextId;
         }
     }
 }
 
-void cuda_points_to_voxel(const float* inPoints, const int* devNumValidPointsInput, int* outPosIndexBuff,
-                         int* outCoords, float* outVoxels, int* outVoxelNum, int* dCounter,
-                         int GridX, int GridY, int GridZ,
-                         float RangeMinX, float RangeMinY, float RangeMinZ,
-                         float VoxelSizeX, float VoxelSizeY, float VoxelSizeZ,
-                         int batchSize, int inPointsNum, int inCols, int maxValidOutput,
-                         int maxPointsPerVoxel, int* TensorRowOffsetPtr, int* TensorColumnsPtr,
-                         int cluster_offset, int center_offset, int supplement, int cuda_idx){
 
-    std::vector<int> numValidPointsInput(batchSize);
-    const int numPointsPerBatchInput = inPointsNum / batchSize;
-    checkCudaErrors(cudaMemcpy(numValidPointsInput.data(), devNumValidPointsInput, sizeof(int) * batchSize, cudaMemcpyDeviceToHost));
-    for(int i = 0; i < batchSize; ++i)
-        numValidPointsInput[i] = numValidPointsInput[i] < 0 ? numPointsPerBatchInput:numValidPointsInput[i];
+void cuda_points_to_voxel(const float* inPoints, const int* devNumValidPointsInput,
+                         int* outCoords, int* devValidOutputPoints, float* outVoxels, int* dCounter,
+                         int* map_tensor_rw, int* addr_tensor_rw, HashEntry* list,
+                         std::vector<float> point_cloud_range, std::vector<float> voxel_size, std::vector<int> grid_size,
+                         int batchSize, int inPointsNum, int inCols, int outCols,
+                         int cluster_offset, int center_offset, int supplement,
+                         int maxValidOutput, int max_points, const int value_map_z)
+{
+    const int maxInputPoints = inPointsNum / batchSize;
 
-    int outCols = inCols-1, write_offset_cluster = inCols-1, write_offset_center = inCols-1;
-    if(cluster_offset!=0){
-        outCols += 3;
-        write_offset_center += 3;
-    }
-    if(center_offset!=0) outCols += 3;
+    InitializeHashMap(inPoints, devNumValidPointsInput, dCounter, map_tensor_rw, list, addr_tensor_rw,
+                      batchSize, maxInputPoints, maxValidOutput, inCols, point_cloud_range, voxel_size, grid_size, value_map_z);
 
-    const int batchRowOffset = GridX*GridY + 1;
+    int num_thread;
     int blockSize;   // The launch configurator returned block size
     int minGridSize; // The minimum grid size needed to achieve the
-                        // maximum occupancy for a full device launch
+                    // maximum occupancy for a full device launch
 
-    std::vector<int> numvalidPosOut(batchSize, 0);
-    for(int i = 0; i < batchSize; ++i)
+    checkCudaErrors(cudaMemset(dCounter, 0, sizeof(int) * batchSize));
+
+    num_thread = batchSize * maxValidOutput;
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, ExtractValidOutVoxelKernel, 0, num_thread);
+    minGridSize = std::min(minGridSize, DivUp(num_thread, blockSize));
+    ExtractValidOutVoxelKernel<<<minGridSize, blockSize>>>(inPoints, addr_tensor_rw, map_tensor_rw, list, dCounter, outVoxels,
+                                                            outCoords, devValidOutputPoints, batchSize, inCols, outCols, maxInputPoints, maxValidOutput,
+                                                            cluster_offset, center_offset, supplement, max_points,
+                                                            voxel_size[0], voxel_size[1],voxel_size[2],
+                                                            point_cloud_range[0], point_cloud_range[1], point_cloud_range[2]);
+
+    if(supplement != 0)
     {
-        const float* inPointsPerBatch = inPoints + i * numPointsPerBatchInput * inCols;
-        int* outPosIndexBuffPerBatch = outPosIndexBuff + i * numPointsPerBatchInput;
-        int* outCoordsPerBatch = outCoords + i * maxValidOutput * 4;
-        float* outVoxelsPerBatch = outVoxels + i * maxValidOutput * maxPointsPerVoxel * outCols;
-        int* outVoxelNumPerBatch = outVoxelNum + i * maxValidOutput;
-        int* TensorRowOffsetPtrPerBatch = TensorRowOffsetPtr + i * batchRowOffset;
-        int* TensorColumnsPtrPerBatch = TensorColumnsPtr + i * maxValidOutput;
-        int* dCounterPerBatch = dCounter + i;
-        int* hCounterPerBatch = numvalidPosOut.data() + i;
-        int numValidPointsInputPerBatch = numValidPointsInput[i];
-
-        checkCudaErrors(cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, TraverseInputPointsPerBatch, 0, numValidPointsInputPerBatch));
-        minGridSize = std::min(minGridSize, DivUp(numValidPointsInputPerBatch, blockSize));
-
-        // std::cout<<"blockSize  " << blockSize << "  minGridSize  "<< minGridSize << "  inPointsNum: " << numValidPointsInputPerBatch << std::endl;
-        TraverseInputPointsPerBatch<<<minGridSize, blockSize>>>(inPointsPerBatch, numPointsPerBatchInput,
-                                                                 outPosIndexBuffPerBatch, dCounterPerBatch,
-                                                                 GridX, GridY, GridZ,
-                                                                 RangeMinX, RangeMinY, RangeMinZ,
-                                                                 VoxelSizeX, VoxelSizeY, VoxelSizeZ,
-                                                                 inCols, numValidPointsInputPerBatch);
-
-        checkCudaErrors(cudaMemcpy(hCounterPerBatch, dCounterPerBatch, sizeof(int), cudaMemcpyDeviceToHost));
-        int* outBuffStartNew = NULL;
-
-
-#ifdef USE_TORCH
-        auto options = torch::TensorOptions({at::kCUDA, cuda_idx}).dtype(torch::kInt32);
-        if(*hCounterPerBatch<1) continue;
-        std::tuple<torch::Tensor, torch::Tensor> out_results;
-        bool sorted = true;
-        bool return_inverse = false;
-        auto outPosIndexBuffTensor = torch::from_blob(outPosIndexBuffPerBatch, {*hCounterPerBatch, }, options);
-        out_results = at::_unique(outPosIndexBuffTensor, sorted, return_inverse);
-        torch::Tensor UniqueTensor = std::get<0>(out_results);
-        int outvalidbatch = UniqueTensor.size(0);
-        outBuffStartNew = UniqueTensor.data_ptr<int>();
-        *hCounterPerBatch = outvalidbatch;
-#else
-        thrust::sort(thrust::device, outPosIndexBuffPerBatch, outPosIndexBuffPerBatch + *hCounterPerBatch);
-        void*  pickingSpace = NULL;
-        size_t pickingSize = 0;
-        checkCudaErrors(cudaMemset(dCounterPerBatch, 0, sizeof(int)));
-
-        cub::DeviceSelect::Unique(pickingSpace, pickingSize, outPosIndexBuffPerBatch, outPosIndexBuffPerBatch, dCounterPerBatch, *hCounterPerBatch);
-        checkCudaErrors(cudaMalloc(&pickingSpace, pickingSize));
-        cub::DeviceSelect::Unique(pickingSpace, pickingSize, outPosIndexBuffPerBatch, outPosIndexBuffPerBatch, dCounterPerBatch, *hCounterPerBatch);
-        checkCudaErrors(cudaFree(pickingSpace));
-        outBuffStartNew = outPosIndexBuffPerBatch;
-        checkCudaErrors(cudaMemcpy(hCounterPerBatch, dCounterPerBatch, sizeof(int), cudaMemcpyDeviceToHost));
-#endif
-
-        int valid_out_num = *hCounterPerBatch;
-        if(valid_out_num<1) continue;
-
-        float stride = 1.0;
-        if(valid_out_num>maxValidOutput)
-        {
-            stride = (float)valid_out_num / (float)maxValidOutput;
-            *hCounterPerBatch = maxValidOutput;
-        }
-        //compute OutpuCoords
-        checkCudaErrors(cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, OutputCoords, 0, *hCounterPerBatch));
-        minGridSize = std::min(minGridSize, DivUp(*hCounterPerBatch, blockSize));
-        OutputCoords<<<minGridSize, blockSize>>>(outCoordsPerBatch, outBuffStartNew, GridX, GridY, GridZ, maxValidOutput, valid_out_num, *hCounterPerBatch, stride, i); // order: ZYX
-        // valid_out_num = *hCounterPerBatch;
-
-        //CSR: row
-        checkCudaErrors(cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, computeRowOffsetOA, 0, *hCounterPerBatch));
-        minGridSize = std::min(minGridSize, DivUp(*hCounterPerBatch, blockSize));
-        computeRowOffsetOA<<<minGridSize, blockSize>>>(outCoordsPerBatch, TensorRowOffsetPtrPerBatch, GridY, *hCounterPerBatch);
-
-        //CSR: cumsum
-        int* TensorRowOffsetPtr_new = NULL;
-#ifdef USE_TORCH
-        torch::Tensor cumsumTensor;
-        auto TensorRowOffsetPtrTensor = torch::from_blob(TensorRowOffsetPtrPerBatch, {batchRowOffset, }, options);
-        cumsumTensor = at::_cumsum(TensorRowOffsetPtrTensor, 0);
-        TensorRowOffsetPtr_new = cumsumTensor.data_ptr<int>();
-#else
-        void* d_temp_storage = NULL;
-        size_t temp_storage_bytes = 0;
-        cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, TensorRowOffsetPtrPerBatch,
-                                      TensorRowOffsetPtrPerBatch, batchRowOffset, 0, false);
-        checkCudaErrors(cudaMalloc(&d_temp_storage, temp_storage_bytes));
-        cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, TensorRowOffsetPtrPerBatch,
-                                      TensorRowOffsetPtrPerBatch, batchRowOffset, 0, false);
-        checkCudaErrors(cudaFree(d_temp_storage));
-        TensorRowOffsetPtr_new = TensorRowOffsetPtrPerBatch;
-#endif
-        //CSR: cols
-        checkCudaErrors(cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, computeColumnIdx, 0, *hCounterPerBatch));
-        minGridSize = std::min(minGridSize, DivUp(*hCounterPerBatch, blockSize));
-        computeColumnIdx<<<minGridSize, blockSize>>>(TensorColumnsPtrPerBatch, TensorRowOffsetPtr_new, outCoordsPerBatch, GridY, GridX, *hCounterPerBatch);
-
-        //Voxel
-        checkCudaErrors(cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, GetVoxelPerBatch, 0, numValidPointsInputPerBatch));
-        minGridSize = std::min(minGridSize, DivUp(numValidPointsInputPerBatch, blockSize));
-        GetVoxelPerBatch<<<minGridSize, blockSize>>>(inPointsPerBatch, outVoxelsPerBatch, outVoxelNumPerBatch,
-                                                         TensorRowOffsetPtr_new, TensorColumnsPtrPerBatch,
-                                                         GridX, GridY, GridZ,
-                                                         RangeMinX, RangeMinY, RangeMinZ,
-                                                         VoxelSizeX, VoxelSizeY, VoxelSizeZ,
-                                                         inCols, outCols, numValidPointsInputPerBatch, maxPointsPerVoxel);
-        if(cluster_offset!=0)
-        {
-            checkCudaErrors(cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, ExtendVoxelClusterOffsetPerBatch, 0, *hCounterPerBatch));
-            minGridSize = std::min(minGridSize, DivUp(*hCounterPerBatch, blockSize));
-            ExtendVoxelClusterOffsetPerBatch<<<minGridSize, blockSize>>>(outVoxelsPerBatch, outVoxelNumPerBatch, *hCounterPerBatch,
-                                                                         VoxelSizeX, VoxelSizeY, VoxelSizeZ,
-                                                                         outCols, write_offset_cluster, maxPointsPerVoxel);
-        }
-
-        if(center_offset!=0)
-        {
-            checkCudaErrors(cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, ExtendVoxelCenterOffsetPerBatch, 0, *hCounterPerBatch));
-            minGridSize = std::min(minGridSize, DivUp(*hCounterPerBatch, blockSize));
-            ExtendVoxelCenterOffsetPerBatch<<<minGridSize, blockSize>>>(outVoxelsPerBatch, outCoordsPerBatch,
-                                                                         outVoxelNumPerBatch, *hCounterPerBatch,
-                                                                         RangeMinX, RangeMinY, RangeMinZ,
-                                                                         VoxelSizeX, VoxelSizeY, VoxelSizeZ,
-                                                                         outCols, write_offset_center, maxPointsPerVoxel);
-        }
-        if(supplement!=0){
-            //Voxel supplement
-            checkCudaErrors(cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, GetVoxelSupplementPerBatch, 0, *hCounterPerBatch));
-            minGridSize = std::min(minGridSize, DivUp(*hCounterPerBatch, blockSize));
-            GetVoxelSupplementPerBatch<<<minGridSize, blockSize>>>(outVoxelsPerBatch, outVoxelNumPerBatch, *hCounterPerBatch, outCols, maxPointsPerVoxel);
-        }
+        num_thread = batchSize * maxValidOutput * max_points;
+        cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, SupplementVoxelsKernel, 0, num_thread);
+        minGridSize = std::min(minGridSize, DivUp(num_thread, blockSize));
+        SupplementVoxelsKernel<<<minGridSize, blockSize>>>(outVoxels, devValidOutputPoints, dCounter, max_points, maxValidOutput, batchSize, outCols);
     }
-    //for op output validPosNum
-    checkCudaErrors(cudaMemcpy(dCounter, numvalidPosOut.data(), sizeof(int) * batchSize, cudaMemcpyHostToDevice));
+
 }
+
+
+void cuda_points_to_voxel_fp16(const __half* inPoints, const int* devNumValidPointsInput,
+                         int* outCoords, int* devValidOutputPoints, __half* outVoxels, int* dCounter,
+                         int* map_tensor_rw, int* addr_tensor_rw, HashEntry* list,
+                         std::vector<float> point_cloud_range, std::vector<float> voxel_size, std::vector<int> grid_size,
+                         int batchSize, int inPointsNum, int inCols, int outCols,
+                         int cluster_offset, int center_offset, int supplement,
+                         int maxValidOutput, int max_points, const int value_map_z)
+{
+    const int maxInputPoints = inPointsNum / batchSize;
+
+    InitializeHashMapFp16(inPoints, devNumValidPointsInput, dCounter, map_tensor_rw, list, addr_tensor_rw,
+                      batchSize, maxInputPoints, maxValidOutput, inCols, point_cloud_range, voxel_size, grid_size, value_map_z);
+
+    int num_thread;
+    int blockSize;   // The launch configurator returned block size
+    int minGridSize; // The minimum grid size needed to achieve the
+                    // maximum occupancy for a full device launch
+
+    checkCudaErrors(cudaMemset(dCounter, 0, sizeof(int) * batchSize));
+
+    num_thread = batchSize * maxValidOutput;
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, ExtractValidOutVoxelHalfKernel, 0, num_thread);
+    minGridSize = std::min(minGridSize, DivUp(num_thread, blockSize));
+    ExtractValidOutVoxelHalfKernel<<<minGridSize, blockSize>>>(inPoints, addr_tensor_rw, map_tensor_rw, list, dCounter, outVoxels,
+                                                            outCoords, devValidOutputPoints, batchSize, inCols, outCols, maxInputPoints, maxValidOutput,
+                                                            cluster_offset, center_offset, supplement, max_points,
+                                                            voxel_size[0], voxel_size[1],voxel_size[2],
+                                                            point_cloud_range[0], point_cloud_range[1], point_cloud_range[2]);
+
+    if(supplement != 0)
+    {
+        num_thread = batchSize * maxValidOutput * max_points;
+        cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, SupplementVoxelsHalfKernel, 0, num_thread);
+        minGridSize = std::min(minGridSize, DivUp(num_thread, blockSize));
+        SupplementVoxelsHalfKernel<<<minGridSize, blockSize>>>(outVoxels, devValidOutputPoints, dCounter, max_points, maxValidOutput, batchSize, outCols);
+    }
+
+}
+
 } // namespace

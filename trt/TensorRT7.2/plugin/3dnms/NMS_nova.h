@@ -13,6 +13,7 @@
 
 namespace NAMESPACE
 {
+// static inline int DivUp(int a, int b) { return (a + b - 1) / b; }
 inline
 cudaError_t checkCudaErrors(cudaError_t result)
 {
@@ -28,7 +29,13 @@ cudaError_t checkCudaErrors(cudaError_t result)
 
 void cuda_nms(const float *batch_box, const float *batch_cls_rw, float *score, int *cls_index, int *range_index_rw, int* pos_rw, int *cls_temp, float *box_temp,
     float *ious_rw, float *dst, int num_box, int num_cls, int nms_pre_maxsize, int nms_post_maxsize, float nms_thresh, int batch_size,
-    float score_thresh, int use_bev);
+    float score_thresh, int use_bev, int* validboxes_rw);
+
+
+void cuda_nms_fp16(const __half *batch_box, const __half *batch_cls_rw, float *score, int *cls_index, int *range_index_rw, int* pos_rw, int *cls_temp, float *box_temp,
+    float *ious_rw, __half *dst, int num_box, int num_cls, int nms_pre_maxsize, int nms_post_maxsize, float nms_thresh, int batch_size,
+    float score_thresh, int use_bev, int* validboxes_rw);
+
 
 }//namespace
 #endif

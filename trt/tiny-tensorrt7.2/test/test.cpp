@@ -49,14 +49,15 @@ void GetFileNames(std::string path, std::string rege, std::vector<std::string>& 
     closedir(pDir);
 }
 
-void loadBin(const std::string& fileName, float* outBuffer, int expand){
+template<class T>
+void loadBin(const std::string& fileName, T* outBuffer, int expand){
     std::fstream infile(fileName.c_str(), std::ios::in | std::ios::binary);
     infile.seekg(0, std::ios::end);
     size_t length = infile.tellg();
     infile.seekg(0, std::ios::beg);
 
     if (expand){
-        float* inputBuffer = (float*)malloc(length);
+        T* inputBuffer = (T*)malloc(length);
         infile.read((char *)inputBuffer, length);
         int num = length / 16;
         for (int i = 0; i < num;i++){
@@ -75,7 +76,7 @@ void loadBin(const std::string& fileName, float* outBuffer, int expand){
 }
 
 
-void loadBinmyself(const std::string& fileName, float* outBuffer, int expand)
+int loadBinmyself(const std::string& fileName, float* outBuffer, int expand)
 {
     std::cout<<std::endl<<"fileName:"<<fileName<<std::endl;
     std::fstream infile(fileName.c_str(), std::ios::in | std::ios::binary);
@@ -83,12 +84,12 @@ void loadBinmyself(const std::string& fileName, float* outBuffer, int expand)
     size_t length = infile.tellg();
     infile.seekg(0, std::ios::beg);
     std::cout<<"bin file length: "<<length<<std::endl;
+    int num = length / 16;
 
     if (expand)
     {
         float* inputBuffer = (float*)malloc(length);
         infile.read((char *)inputBuffer, length);
-        int num = length / 16;
         std::cout<<"num: "<<num<<std::endl;
         for (int i = 0; i<num&&i<25000;i++)
         {
@@ -125,6 +126,7 @@ void loadBinmyself(const std::string& fileName, float* outBuffer, int expand)
             free(inputBuffer);
     }  
     infile.close();
+    return num;
 }
 
 
@@ -232,6 +234,7 @@ void test_onnx(const std::string& onnxModelpath, const std::vector<std::string> 
     for(int num=0;num<images.size();num++)
     {
         std::vector<void *> inputs;
+        int points_num;
         for (int ind = 0; ind < 1; ind++)
         {
             size_t perSize = onnx_net->GetBindingSize(ind);
@@ -244,15 +247,18 @@ void test_onnx(const std::string& onnxModelpath, const std::vector<std::string> 
 
             if (ind==0)
             {
-                loadBinmyself(images[num], indata, 1);   //do inference
+                points_num = loadBinmyself(images[num], indata, 1);   //do inference
             }
             inputs.push_back(indata);
 		
-	    /*perSize = onnx_net->GetBindingSize(1);
-            std::cout<< "perSize "<<perSize<<std::endl;
-            float* in1 = (float*)malloc(perSize);
-	    loadBin(dataFile[1], in1, 0);
-	    inputs.push_back(in1);*/
+            perSize = onnx_net->GetBindingSize(1);
+            int* in1 = (int*)malloc(perSize);
+            if (points_num > 25000){
+                in1[0] = 25000;
+            }else{
+                in1[0] = points_num;
+            }
+            inputs.push_back(in1);
 		
         }
         //float *a=static_cast<float*>(inputs[0]);

@@ -4315,6 +4315,11 @@ DEFINE_BUILTIN_OP_IMPORTER(NMS)
     std::vector<TensorOrWeights> outputs;
     // RETURN_FIRST_OUTPUT(ctx->network()->addPluginV2(intensor.data(), intensor.size(), *plugin));
     nvinfer1::IPluginV2Layer* layer = ctx->network()->addPluginV2(intensor.data(), intensor.size(), *plugin);
+
+    // TensorOrWeights o2 = layer->getOutput(1);
+    // nvinfer1::Dims aa = o2.shape(); 
+    // std::cout << " nms out shape is: " << aa.d[0] << "  " << aa.d[1] << "   " << aa.d[2] << std::endl;
+
     RETURN_ALL_OUTPUTS(layer);
 }
 

@@ -4,9 +4,10 @@ from torch.autograd import Function
 
 class VoxelGeneratorV1Function(Function):
     @staticmethod
-    def forward(ctx,points,ValidInput,voxel_size,point_cloud_range,
-            max_num_points,max_voxels, batch_size,center_offset, cluster_offset, supplement):
+    def forward(ctx, points, ValidInput, voxel_size, point_cloud_range,
+            max_num_points, max_voxels, batch_size, center_offset, cluster_offset, supplement):
         assert points.dim()==2 and points.size(1)>=4
+        assert ValidInput.dtype == torch.int32
         voxels, coords, ValidOutput, num_points_per_voxel = \
                                 VoxelGeneratorV1(points, ValidInput, voxel_size, point_cloud_range,\
                                 max_num_points, max_voxels, batch_size, center_offset, cluster_offset, supplement)
@@ -20,7 +21,8 @@ class VoxelGeneratorV1Function(Function):
                     max_voxels_i=max_voxels, batch_size_i=batch_size, center_offset_i=center_offset,\
                     cluster_offset_i=cluster_offset, supplement_i=supplement, outputs=4)
 
-        
+
+
 class VoxelGenerator(torch.nn.Module):
     def __init__(self, voxel_size, point_cloud_range, max_num_points, max_voxels, type='raw', **kwargs):
         super().__init__()

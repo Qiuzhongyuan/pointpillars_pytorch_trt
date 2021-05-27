@@ -202,11 +202,8 @@ class AnchorHeadSingle(nn.Module):
         dxg = torch.exp(dxt) * dxa
         dyg = torch.exp(dyt) * dya
         dzg = torch.exp(dzt) * dza
-
         rg = rt + ra
-
         return xg, yg, zg, dxg, dyg, dzg, rg
-
 
 class OnnxModelPart2(nn.Module):
     def __init__(self, model):
@@ -215,7 +212,7 @@ class OnnxModelPart2(nn.Module):
         self.dense_head_1x = AnchorHeadSingle(model.dense_head.single_head_1, [0])
         self.dense_head_2x = AnchorHeadSingle(model.dense_head.single_head_2, [1,2])
 
-        self.nms3d = nms.NMSDeploy(nms_post_maxsize=100, nms_pre_maxsize=4000, nms_thresh=0.01, score_thresh=0.1, use_bev=1)
+        self.nms3d = nms.NMS(nms_post_maxsize=100, nms_pre_maxsize=4000, nms_thresh=0.01, score_thresh=0.1, use_bev=1)
 
     def forward(self, input):
         data_dict = {}
@@ -226,15 +223,10 @@ class OnnxModelPart2(nn.Module):
         batch_cls_preds_2x, batch_box_preds_2x = self.dense_head_2x(output_dict['spatial_features_2d'][1])
         batch_cls_preds_1x = batch_cls_preds_1x.sigmoid()
         batch_cls_preds_2x = batch_cls_preds_2x.sigmoid()
-        batch_box_preds_1x = batch_box_preds_1x.permute(0, 2, 1).contiguous()
-        batch_cls_preds_1x = batch_cls_preds_1x.permute(0, 2, 1).contiguous()
-        batch_box_preds_2x = batch_box_preds_2x.permute(0, 2, 1).contiguous()
-        batch_cls_preds_2x = batch_cls_preds_2x.permute(0, 2, 1).contiguous()
 
-        outputs_1x = self.nms3d(batch_box_preds_1x, batch_cls_preds_1x)
-        outputs_2x = self.nms3d(batch_box_preds_2x, batch_cls_preds_2x)
-        outputs_1x = outputs_1x.permute(0, 2, 1).contiguous()
-        outputs_2x = outputs_2x.permute(0, 2, 1).contiguous()
+        outputs_1x = self.nms3d(batch_box_preds_1x, batch_cls_preds_1x)[0]
+        outputs_2x = self.nms3d(batch_box_preds_2x, batch_cls_preds_2x)[0]
+
         return outputs_1x, outputs_2x
 
 class OnnxModelPointPillars(nn.Module):
@@ -340,7 +332,7 @@ def main():
     dummy_input = torch.zeros((25000, 5)).float().cuda() - 100
     dummy_input[:len(points)] = points
 
-    torch.onnx.export(ExportModel, dummy_input, "pointpillars_%s.onnx" % tag, verbose=True, training=False,
+    torch.onnx.export(ExportModel, (dummy_input, valid), "pointpillars_%s.onnx" % tag, verbose=True, training=False,
                       operator_export_type=torch.onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK,opset_version=10,
                       input_names=['points', 'valid'], output_names=['pointpillars_output1', 'pointpillars_output2'])
 

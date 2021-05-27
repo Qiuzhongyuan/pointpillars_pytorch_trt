@@ -29,29 +29,29 @@ Make sure to modify the root path in [kitti_dataset.yaml](tools/cfgs/dataset_con
 
 ## Pretrained
 
-* We provide two pretrained models: the original multi-scale model and a pruned version, get them from [pretrained](https://pan.baidu.com/s/1sWRhbeEZRYADN0YnE10Csw), the code is "0t1h".
+* We provide two pretrained models: the original multi-scale model and a pruned version, get them from [here](https://pan.baidu.com/s/1sWRhbeEZRYADN0YnE10Csw) with verification code "0t1h".
 * 3D mAP
     
 |  | Car@R11 | Pedestrian@R11 | Cyclist@R11 | mAP|
 | :------: | :------: | :------: |:----:|:----:|
 | OpenPCDet | 77.28 | 52.29 | 62.68 | 64.08 |
-| MultiScale | 75.18 | 54.86 | 67.98 | 66 |
-| MultiScale-Pruned | 67.81 | 53.15 | 64.35 | 61.77 |
+| MultiScale | 75.18 | 55.15 | 67.90 | 66.08 |
+| MultiScale-Pruned | 67.81 | 53.54 | 64.37 | 61.91 |
 
  * BEV mAP
     
 |  | Car@R11 | Pedestrian@R11 | Cyclist@R11 | mAP|
 | :------: | :------: | :------: |:----:|:----:|
-| MultiScale | 85.24 | 62.3 | 72.16 | 73.23 |
-| MultiScale-Pruned | 83.83 | 58.37 | 70.41 | 70.87 |
+| MultiScale | 85.24 | 62.45 | 72.16 | 73.28 |
+| MultiScale-Pruned | 83.83 | 58.69 | 70.35 | 70.96 |
 
 After pruning, the AP values for each of the three classes will be a little lower than before. 
-However, FLOPs and inference time are significantly reduced (tested on a Tesla T4).
+However, FLOPs and inference time are significantly reduced (tested on a **2080 TI**).
 
 |  | FLOPs | Params | FP32(PyTorch) | FP32(TRT)
 | :------: | :------: | :------: |:----:|:----:|
-| MultiScale | 274.9G | 20.01M | 75.8ms | 58.95ms
-| MultiScale-Pruned | 40.0G | 944K | N/A | 20.62ms
+| MultiScale | 274.9G | 20.01M | 32.98ms | 24.84ms
+| MultiScale-Pruned | 40.0G | 944K | N/A | 8.97ms
 
 ## ONNX export
 

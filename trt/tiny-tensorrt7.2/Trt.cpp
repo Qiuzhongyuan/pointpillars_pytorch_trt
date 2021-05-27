@@ -57,7 +57,9 @@ using namespace std;
 
 using namespace nvinfer1;
 
-
+#ifndef SAVEOUTPUT
+#define SAVEOUTPUT
+#endif
 
 Trt::Trt() {}
 
@@ -202,7 +204,7 @@ void Trt::Forward_mult(std::vector<void*>& data)
 {
     __half* temp_half = nullptr;
     float* temp_float = nullptr;
-    for (int i = 0; i < data.size(); i++)
+    for (int i = 0; i < data.size()-1; i++)
     {
         
         CUDA_CHECK(cudaMalloc((void**)&temp_float, sizeof(float)*25000*5));
@@ -217,6 +219,8 @@ void Trt::Forward_mult(std::vector<void*>& data)
         CUDA_CHECK(cudaFree(temp_float));
         CUDA_CHECK(cudaFree(temp_half));
     }
+    CUDA_CHECK(cudaMemcpy(mBinding[1], data[1], mBindingSize[1], cudaMemcpyHostToDevice));
+
 
     spdlog::info("\n\n net forward begin");
     cudaEvent_t start,stop;
@@ -239,7 +243,7 @@ void Trt::Forward_mult(std::vector<void*>& data)
 #ifdef SAVEOUTPUT
         std::ofstream outfile;
         char outname[2000];
-        string str=strclone;str=str.substr(0,str.find_last_of("."));str=str+"_"+std::to_string(i)+".bin";
+        string str=strclone;str=str.substr(0,str.find_last_of("."));str=str+"_"+std::to_string(i-mInputSize)+".bin";
         str="../saveint8"+str.substr(str.find_last_of("/"));
         //str="."+str.substr(str.find_last_of("/"));
         std::cout<<"str"<<str<<std::endl;
@@ -300,7 +304,7 @@ void Trt::Forward_mult_FP32(std::vector<void*>& data)
 #ifdef SAVEOUTPUT
         std::ofstream outfile;
         char outname[2000];
-        string str=strclone;str=str.substr(0,str.find_last_of("."));str=str+"_"+std::to_string(i)+".bin";
+        string str=strclone;str=str.substr(0,str.find_last_of("."));str=str+"_"+std::to_string(i-mInputSize)+".bin";
         str="../saveint8"+str.substr(str.find_last_of("/"));
         //str="."+str.substr(str.find_last_of("/"));
         std::cout<<"outname: str"<<str<<std::endl;
@@ -655,8 +659,9 @@ bool Trt::BuildEngineWithUff(const std::string& uffModel,
 }
 
 void Trt::InitEngine() {
-    spdlog::info("init engine...");
+    spdlog::info("init engine  ...");
     mContext = mEngine->createExecutionContext();
+    spdlog::info("after engine  ...");
     assert(mContext != nullptr);
 
     spdlog::info("malloc device memory");
