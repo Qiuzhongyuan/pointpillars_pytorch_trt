@@ -329,7 +329,7 @@ def main():
     points = torch.from_numpy(points).float().cuda()
     points = torch.autograd.Variable(points.contiguous())
     valid = torch.Tensor([len(points)]).int().cuda()
-    dummy_input = torch.zeros((25000, 5)).float().cuda() - 100
+    dummy_input = torch.zeros((25000, 5)).float().cuda()
     dummy_input[:len(points)] = points
 
     torch.onnx.export(ExportModel, (dummy_input, valid), "pointpillars_%s.onnx" % tag, verbose=True, training=False,
