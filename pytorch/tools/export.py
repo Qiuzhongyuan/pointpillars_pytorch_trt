@@ -66,7 +66,7 @@ class OnnxModelPart1(nn.Module):
         for pfn in self.pfn_layers:
             features = pfn(features)
 
-        features = features.permute(0, 2, 1, 3).squeeze(3).squeeze(0)
+        features = features.permute(0, 2, 1, 3).squeeze(3).squeeze(0).contiguous()
 
         return features
 
