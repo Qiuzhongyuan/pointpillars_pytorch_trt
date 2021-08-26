@@ -4,6 +4,7 @@
 #include <vector>
 #include "cuda_voxel_generator.h"
 
+
 namespace NAMESPACE
 {
 __global__
@@ -46,7 +47,7 @@ void ExtractValidOutVoxelKernel(const float* inPoints, int* map_addr, int* map, 
         int hash_addr = map_addr[i];
         if(hash_addr<0) continue;
 
-        int4* outCoorsBatch = ((int4*)outCoors) + curBatch * maxValidOutput;
+        int3* outCoorsBatch = ((int3*)outCoors) + curBatch * maxValidOutput;
         float* outVoxelsBatch = outVoxels + curBatch * maxValidOutput * max_points * outCols;
         int* devValidOutputPointsBatch = devValidOutputPoints + curBatch * maxValidOutput;
 
@@ -62,17 +63,16 @@ void ExtractValidOutVoxelKernel(const float* inPoints, int* map_addr, int* map, 
                     break;
                 }
 
-                int4* outCoors_cur = outCoorsBatch + old_num;
+                int3* outCoors_cur = outCoorsBatch + old_num;
                 float* outVoxels_cur = outVoxelsBatch + old_num * outCols * max_points;
 
-                outCoors_cur -> x = curBatch;
+                outCoors_cur -> x = (entry->intCoor).x;
                 outCoors_cur -> y = (entry->intCoor).y;
                 outCoors_cur -> z = (entry->intCoor).z;
-                outCoors_cur -> w = (entry->intCoor).w;
 
                 int num = 1;
-                for(int j = 0; j < (inCols - 1); ++j)
-                    outVoxels_cur[j] = inPoints[entry_idx * inCols + j + 1];
+                for(int j = 0; j < inCols; ++j)
+                    outVoxels_cur[j] = inPoints[entry_idx * inCols + j];
 
                 int next_idx = entry->nextId;
                 while(next_idx >= 0)
@@ -83,8 +83,8 @@ void ExtractValidOutVoxelKernel(const float* inPoints, int* map_addr, int* map, 
                         (entry_next->intCoor).y = -1;
                         if(num < max_points)
                         {
-                            for(int j = 0; j < inCols - 1; ++j)
-                                outVoxels_cur[num * outCols + j] = inPoints[next_idx * inCols + j + 1];
+                            for(int j = 0; j < inCols; ++j)
+                                outVoxels_cur[num * outCols + j] = inPoints[next_idx * inCols + j];
                             num += 1;
                         }
                     }
@@ -101,41 +101,36 @@ void ExtractValidOutVoxelKernel(const float* inPoints, int* map_addr, int* map, 
                         sum += outVoxels_cur[k * outCols];
                     float mean = sum / (float)num;
                     for(int k = 0; k < num; ++k)
-                        outVoxels_cur[k * outCols + inCols -1] = (outVoxels_cur[k * outCols] - mean) / vsizeX;
+                        outVoxels_cur[k * outCols + inCols   ] = (outVoxels_cur[k * outCols] - mean) / vsizeX;
 
                     sum = 0.0;
                     for(int k = 0; k < num; ++k)
                         sum += outVoxels_cur[k * outCols + 1];
                     mean = sum / (float)num;
                     for(int k = 0; k < num; ++k)
-                        outVoxels_cur[k * outCols + inCols] = (outVoxels_cur[k * outCols + 1] - mean) / vsizeY;
+                        outVoxels_cur[k * outCols + inCols + 1] = (outVoxels_cur[k * outCols + 1] - mean) / vsizeY;
 
                     sum = 0.0;
                     for(int k = 0; k < num; ++k)
                         sum += outVoxels_cur[k * outCols + 2];
                     mean = sum / (float)num;
                     for(int k = 0; k < num; ++k)
-                        outVoxels_cur[k * outCols + inCols + 1] = (outVoxels_cur[k * outCols + 2] - mean) / vsizeZ;
+                        outVoxels_cur[k * outCols + inCols + 2] = (outVoxels_cur[k * outCols + 2] - mean) / vsizeZ;
 
                 }
                 if(center_offset != 0)
                 {
-                    float center_x = rangeMinX + ((float)(outCoors_cur -> w) + 0.5) * vsizeX;
-                    float center_y = rangeMinY + ((float)(outCoors_cur -> z) + 0.5) * vsizeY;
-                    float center_z = rangeMinZ + ((float)(outCoors_cur -> y) + 0.5) * vsizeZ;
+                    float center_x = rangeMinX + ((float)(outCoors_cur -> z) + 0.5) * vsizeX;
+                    float center_y = rangeMinY + ((float)(outCoors_cur -> y) + 0.5) * vsizeY;
+                    float center_z = rangeMinZ + ((float)(outCoors_cur -> x) + 0.5) * vsizeZ;
                     for(int k = 0; k < num; ++k)
                     {
-                        outVoxels_cur[k * outCols + inCols - 1 + offset] = (outVoxels_cur[k * outCols    ] - center_x) / vsizeX;
-                        outVoxels_cur[k * outCols + inCols     + offset] = (outVoxels_cur[k * outCols + 1] - center_y) / vsizeY;
-                        outVoxels_cur[k * outCols + inCols + 1 + offset] = (outVoxels_cur[k * outCols + 2] - center_z) / vsizeZ;
+                        outVoxels_cur[k * outCols + inCols     + offset] = (outVoxels_cur[k * outCols    ] - center_x) / vsizeX;
+                        outVoxels_cur[k * outCols + inCols + 1 + offset] = (outVoxels_cur[k * outCols + 1] - center_y) / vsizeY;
+                        outVoxels_cur[k * outCols + inCols + 2 + offset] = (outVoxels_cur[k * outCols + 2] - center_z) / vsizeZ;
                     }
                 }
-                //if(supplement != 0) //too slow
-                //{
-                //    for(int k = num; k < max_points; ++k)
-                //        for(int l = 0; l < outCols; ++l)
-                //            outVoxels_cur[k * outCols + l] = outVoxels_cur[l];
-                //}
+
                 devValidOutputPointsBatch[old_num] = num;
             }
             entry_idx = entry->nextId;
@@ -184,7 +179,7 @@ void ExtractValidOutVoxelHalfKernel(const __half* inPoints, int* map_addr, int* 
         int hash_addr = map_addr[i];
         if(hash_addr<0) continue;
 
-        int4* outCoorsBatch = ((int4*)outCoors) + curBatch * maxValidOutput;
+        int3* outCoorsBatch = ((int3*)outCoors) + curBatch * maxValidOutput;
         __half* outVoxelsBatch = outVoxels + curBatch * maxValidOutput * max_points * outCols;
         int* devValidOutputPointsBatch = devValidOutputPoints + curBatch * maxValidOutput;
 
@@ -200,17 +195,16 @@ void ExtractValidOutVoxelHalfKernel(const __half* inPoints, int* map_addr, int* 
                     break;
                 }
 
-                int4* outCoors_cur = outCoorsBatch + old_num;
+                int3* outCoors_cur = outCoorsBatch + old_num;
                 __half* outVoxels_cur = outVoxelsBatch + old_num * outCols * max_points;
 
-                outCoors_cur -> x = curBatch;
+                outCoors_cur -> x = (entry->intCoor).x;
                 outCoors_cur -> y = (entry->intCoor).y;
                 outCoors_cur -> z = (entry->intCoor).z;
-                outCoors_cur -> w = (entry->intCoor).w;
 
                 int num = 1;
-                for(int j = 0; j < (inCols - 1); ++j)
-                    outVoxels_cur[j] = inPoints[entry_idx * inCols + j + 1];
+                for(int j = 0; j < inCols; ++j)
+                    outVoxels_cur[j] = inPoints[entry_idx * inCols + j];
 
                 int next_idx = entry->nextId;
                 while(next_idx >= 0)
@@ -221,8 +215,8 @@ void ExtractValidOutVoxelHalfKernel(const __half* inPoints, int* map_addr, int* 
                         (entry_next->intCoor).y = -1;
                         if(num < max_points)
                         {
-                            for(int j = 0; j < inCols - 1; ++j)
-                                outVoxels_cur[num * outCols + j] = inPoints[next_idx * inCols + j + 1];
+                            for(int j = 0; j < inCols; ++j)
+                                outVoxels_cur[num * outCols + j] = inPoints[next_idx * inCols + j];
                             num += 1;
                         }
                     }
@@ -239,33 +233,33 @@ void ExtractValidOutVoxelHalfKernel(const __half* inPoints, int* map_addr, int* 
                         sum = __hadd(sum, outVoxels_cur[k * outCols]);
                     __half mean = __hmul(sum, __float2half(1 / (float)num));
                     for(int k = 0; k < num; ++k)
-                        outVoxels_cur[k * outCols + inCols -1] = __hmul(__hsub(outVoxels_cur[k * outCols], mean), __float2half(1 / vsizeX));
+                        outVoxels_cur[k * outCols + inCols] = __hmul(__hsub(outVoxels_cur[k * outCols], mean), __float2half(1 / vsizeX));
 
                     sum = __float2half(0.0f);
                     for(int k = 0; k < num; ++k)
                         sum = __hadd(sum, outVoxels_cur[k * outCols + 1]);
                     mean = __hmul(sum, __float2half(1 / (float)num));
                     for(int k = 0; k < num; ++k)
-                        outVoxels_cur[k * outCols + inCols] = __hmul(__hsub(outVoxels_cur[k * outCols + 1], mean), __float2half(1 / vsizeY));
+                        outVoxels_cur[k * outCols + inCols + 1] = __hmul(__hsub(outVoxels_cur[k * outCols + 1], mean), __float2half(1 / vsizeY));
 
                     sum = __float2half(0.0f);
                     for(int k = 0; k < num; ++k)
                         sum = __hadd(sum, outVoxels_cur[k * outCols + 2]);
                     mean = __hmul(sum, __float2half(1 / (float)num));
                     for(int k = 0; k < num; ++k)
-                        outVoxels_cur[k * outCols + inCols + 1] = __hmul(__hsub(outVoxels_cur[k * outCols + 2], mean), __float2half(1 / vsizeZ));
+                        outVoxels_cur[k * outCols + inCols + 2] = __hmul(__hsub(outVoxels_cur[k * outCols + 2], mean), __float2half(1 / vsizeZ));
 
                 }
                 if(center_offset != 0)
                 {
-                    __half center_x = __float2half(rangeMinX + ((float)(outCoors_cur -> w) + 0.5) * vsizeX);
-                    __half center_y = __float2half(rangeMinY + ((float)(outCoors_cur -> z) + 0.5) * vsizeY);
-                    __half center_z = __float2half(rangeMinZ + ((float)(outCoors_cur -> y) + 0.5) * vsizeZ);
+                    __half center_x = __float2half(rangeMinX + ((float)(outCoors_cur -> z) + 0.5) * vsizeX);
+                    __half center_y = __float2half(rangeMinY + ((float)(outCoors_cur -> y) + 0.5) * vsizeY);
+                    __half center_z = __float2half(rangeMinZ + ((float)(outCoors_cur -> x) + 0.5) * vsizeZ);
                     for(int k = 0; k < num; ++k)
                     {
-                        outVoxels_cur[k * outCols + inCols - 1 + offset] = __hmul(__hsub(outVoxels_cur[k * outCols    ], center_x), __float2half(1 / vsizeX));
-                        outVoxels_cur[k * outCols + inCols     + offset] = __hmul(__hsub(outVoxels_cur[k * outCols + 1], center_y), __float2half(1 / vsizeY));
-                        outVoxels_cur[k * outCols + inCols + 1 + offset] = __hmul(__hsub(outVoxels_cur[k * outCols + 2], center_z), __float2half(1 / vsizeZ));
+                        outVoxels_cur[k * outCols + inCols     + offset] = __hmul(__hsub(outVoxels_cur[k * outCols    ], center_x), __float2half(1 / vsizeX));
+                        outVoxels_cur[k * outCols + inCols + 1 + offset] = __hmul(__hsub(outVoxels_cur[k * outCols + 1], center_y), __float2half(1 / vsizeY));
+                        outVoxels_cur[k * outCols + inCols + 2 + offset] = __hmul(__hsub(outVoxels_cur[k * outCols + 2], center_z), __float2half(1 / vsizeZ));
                     }
                 }
 

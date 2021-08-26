@@ -61,7 +61,6 @@ MODEL:
         MAX_POINTS_PER_VOXEL: 64
         MAX_NUMBER_OF_VOXELS: 20000
         SUPPLEMENT: 1
-        DPU: False
 
     MAP_TO_BEV:
         NAME: PointPillarScatter
@@ -74,7 +73,6 @@ MODEL:
         NUM_FILTERS: [64, 64, 128, 256]
         UPSAMPLE_STRIDES: [1, 1, 2, 4, 2]
         NUM_UPSAMPLE_FILTERS: [64, 96, 96, 96, 96]
-        DPU: False
 
 
     DENSE_HEAD:
@@ -184,11 +182,11 @@ MODEL:
 
 
 OPTIMIZATION:
-    BATCH_SIZE_PER_GPU: 1
+    BATCH_SIZE_PER_GPU: 2
     NUM_EPOCHS: 50
 
-    OPTIMIZER: adam_onecycle
-    LR: 0.003
+    OPTIMIZER: adam_onecycle # adam_onecycle
+    LR: 0.03
     WEIGHT_DECAY: 0.01
     MOMENTUM: 0.9
 

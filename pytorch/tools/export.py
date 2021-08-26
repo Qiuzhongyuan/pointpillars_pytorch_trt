@@ -243,12 +243,10 @@ class OnnxModelPointPillars(nn.Module):
         self.h = 496
         self.w = 432
         self.batch_size = 1
-    def forward(self, points, valid=None):
-        if valid is None:
-            valid = torch.zeros((self.batch_size, )).int().cuda() - 10
-        features, coord, valid, valid_voxel = self.VoxelGeneratorV1(points, valid, self.batch_size)
+    def forward(self, points, valid):
+        features, coord, valid, valid_voxel = self.VoxelGeneratorV1(points, valid)
         features = self.part1(features)
-        features = dense.Dense(features, coord, 1, [1, self.h, self.w])
+        features = dense.dense(features, coord, valid, [1, self.h, self.w])
         features = features.view(1, -1, self.h, self.w)
         outputs_1x, outputs_2x = self.part2(features)
 
@@ -325,11 +323,11 @@ def main():
     ExportModel = ExportModel.cuda()
 
     points = np.fromfile(args.pcs_for_export, dtype=np.float32).reshape(-1, 4)
-    points = np.concatenate([np.zeros((len(points), 1), dtype=np.float32), points], 1)
+
     points = torch.from_numpy(points).float().cuda()
     points = torch.autograd.Variable(points.contiguous())
     valid = torch.Tensor([len(points)]).int().cuda()
-    dummy_input = torch.zeros((25000, 5)).float().cuda()
+    dummy_input = torch.zeros((25000, 4)).float().cuda()
     dummy_input[:len(points)] = points
 
     torch.onnx.export(ExportModel, (dummy_input, valid), "pointpillars_%s.onnx" % tag, verbose=True, training=False,

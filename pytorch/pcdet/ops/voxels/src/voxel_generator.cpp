@@ -17,7 +17,7 @@ VoxelGeneratorV1(torch::Tensor points, torch::Tensor ValidInput, std::vector<flo
 	auto inputType = points.scalar_type();
 
 	int inCols = points.size(1);
-	int num_features = inCols - 1;
+	int num_features = inCols;
 	int outCols = num_features;
 	if(cluster_offset !=0) outCols += 3;
 	if(center_offset !=0) outCols += 3;
@@ -34,7 +34,7 @@ VoxelGeneratorV1(torch::Tensor points, torch::Tensor ValidInput, std::vector<flo
     auto options = torch::TensorOptions({at::kCUDA, cuda_idx}).dtype(torch::kInt32);
 
 	torch::Tensor voxels = torch::zeros({max_voxels * batch_size, max_num_points, outCols}, torch::dtype(inputType).device(points.device())); //init 0
-	torch::Tensor coors = torch::zeros({max_voxels * batch_size, 4}, options) - 1;  //init -1
+	torch::Tensor coors = torch::zeros({max_voxels * batch_size, 3}, options) - 1;  //init -1
     torch::Tensor num_points_per_voxel = torch::zeros({max_voxels * batch_size, }, options); //init 0
     torch::Tensor ValidOutput = torch::zeros({batch_size, }, options); //init 0
 

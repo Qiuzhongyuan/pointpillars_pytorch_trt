@@ -60,6 +60,10 @@
    RNNHelpers.cpp
    OnnxAttrs.cpp
  )
+
+ find_package(LibXml2 REQUIRED)
+ include_directories(${LIBXXML2_INCLUDE_DIR})
+
  
  # Do not build ONNXIFI by default.
  if(BUILD_ONNXIFI)
@@ -134,12 +138,12 @@
  # Importer library
  # --------------------------------
  
- if (USE_TORCH)
-   include_directories(/home/nvidia/.local/lib/python3.6/site-packages/torch/include/torch/csrc/api/include)
-   include_directories(/home/nvidia/.local/lib/python3.6/site-packages/torch/include)
-   set(Torch_DIR /home/nvidia/.local/lib/python3.6/site-packages/torch/share/cmake/Torch)
-   find_package(Torch REQUIRED)
- endif()
+#  if (USE_TORCH)
+#    include_directories(/home/nvidia/.local/lib/python3.6/site-packages/torch/include/torch/csrc/api/include)
+#    include_directories(/home/nvidia/.local/lib/python3.6/site-packages/torch/include)
+#    set(Torch_DIR /home/nvidia/.local/lib/python3.6/site-packages/torch/share/cmake/Torch)
+#    find_package(Torch REQUIRED)
+#  endif()
  # link_directories(/home/nvidia/.local/lib/python3.6/site-packages/torch/lib)	
  
  add_library(nvonnxparser SHARED ${IMPORTER_SOURCES})
@@ -147,7 +151,7 @@
  if (USE_TORCH)
    target_link_libraries(nvonnxparser PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY} ${TORCH_LIBRARIES})
  else()
-   target_link_libraries(nvonnxparser PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY})
+   target_link_libraries(nvonnxparser PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY} ${LIBXML2_LIBRARIES})
  endif()
  set_property(TARGET nvonnxparser PROPERTY CXX_STANDARD 14)
  set_target_properties(nvonnxparser PROPERTIES
@@ -162,7 +166,7 @@
  if (USE_TORCH)
    target_link_libraries(nvonnxparser_static PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY} ${TORCH_LIBRARIES})
  else()
-   target_link_libraries(nvonnxparser_static PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY})
+   target_link_libraries(nvonnxparser_static PUBLIC onnx_proto ${PROTOBUF_LIBRARY} ${TENSORRT_LIBRARY} ${LIBXML2_LIBRARIES})
  endif()
  set_property(TARGET nvonnxparser_static PROPERTY CXX_STANDARD 14)
  
@@ -175,7 +179,7 @@
    if (USE_TORCH)
      target_link_libraries(trt_onnxify PUBLIC nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS} ${TORCH_LIBRARIES})
    else()
-     target_link_libraries(trt_onnxify PUBLIC nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
+     target_link_libraries(trt_onnxify PUBLIC nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS} ${LIBXML2_LIBRARIES})
    endif()
    set_property(TARGET trt_onnxify PROPERTY CXX_STANDARD 14)
  endif()
@@ -188,7 +192,7 @@
  if (USE_TORCH)
    target_link_libraries(onnx2trt PUBLIC ${PROTOBUF_LIB} onnx nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS} ${TORCH_LIBRARIES}) #${CUDA_LIBRARIES} 
  else()
-   target_link_libraries(onnx2trt PUBLIC ${PROTOBUF_LIB} onnx nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS}) #${CUDA_LIBRARIES} 
+   target_link_libraries(onnx2trt PUBLIC ${PROTOBUF_LIB} onnx nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS} ${LIBXML2_LIBRARIES}) #${CUDA_LIBRARIES} 
  endif()
  set_property(TARGET onnx2trt PROPERTY CXX_STANDARD 14)
  
@@ -200,7 +204,7 @@
  if (USE_TORCH)
    target_link_libraries(getSupportedAPITest PUBLIC ${PROTOBUF_LIB} nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS} ${TORCH_LIBRARIES}) #${CUDA_LIBRARIES} 
  else()
-   target_link_libraries(getSupportedAPITest PUBLIC ${PROTOBUF_LIB} nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS}) #${CUDA_LIBRARIES} 
+   target_link_libraries(getSupportedAPITest PUBLIC ${PROTOBUF_LIB} nvonnxparser_static ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS} ${LIBXML2_LIBRARIES}) #${CUDA_LIBRARIES} 
  endif()
  set_property(TARGET getSupportedAPITest PROPERTY CXX_STANDARD 14)
  

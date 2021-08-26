@@ -9,34 +9,33 @@
 #include "plugin.h"
 #include <NvInfer.h>
 #include <assert.h>
-#include <cub/cub.cuh>
 #include <iostream>
 #include <stdio.h>
-#include <thrust/device_ptr.h>
-#include <thrust/fill.h>
-#include <thrust/sort.h>
+
 
 namespace NAMESPACE
 {
 
-extern "C" __global__ void ScatterFP16(const __half *features_rw, const int *indices_rw, __half *output_rw, 
+extern "C" __global__ void ScatterFP16(const __half *features_rw, const int *indices_rw, const int *valid_rw, __half *output_rw,
                                     int spatialShape0, int spatialShape1, int spatialShape2,
-                                    int num_voxels, int num_features)
+                                    int max_voxels, int batch_size, int num_features)
 {
     int idx    = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
 
-    for(int i = idx; i < num_voxels; i += stride)
+    for(int i = idx; i < max_voxels * batch_size; i += stride)
     {
+        const int batch_id = i / max_voxels;
+        const int voxel_id_per_batch = i % max_voxels;
+        if(voxel_id_per_batch>=valid_rw[batch_id]) continue;
 
-        int4 coor = reinterpret_cast<const int4*>(indices_rw)[i];
+        int3 coor = reinterpret_cast<const int3*>(indices_rw)[i];
         int output_vol = spatialShape0 * spatialShape1 * spatialShape2;
-        //remove init -1.
-        if(coor.x < 0 || coor.y < 0 || coor.z < 0 || coor.w < 0 || coor.y >= spatialShape0 || coor.z >= spatialShape1 || coor.w >= spatialShape2) continue;
+
 
         // out shape: (bs, c, x, y, z)
-        __half *outPerBatch = output_rw + coor.x * num_features * output_vol;
-        int offset = coor.y * spatialShape1 * spatialShape2 + coor.z * spatialShape2 + coor.w;
+        __half *outPerBatch = output_rw + batch_id * num_features * output_vol;
+        int offset = coor.x * spatialShape1 * spatialShape2 + coor.y * spatialShape2 + coor.z;
 
         for(int j = 0; j < num_features; ++j)
             outPerBatch[j * output_vol + offset] = features_rw[i * num_features + j];
@@ -45,16 +44,16 @@ extern "C" __global__ void ScatterFP16(const __half *features_rw, const int *ind
 }
 
 
-void cuda_scatter_fp16(const __half *features_rw, const int *indices_rw, __half *output_rw, std::vector<int> spatialShape_rw,
-                        int num_voxels, int num_features)
+void cuda_scatter_fp16(const __half *features_rw, const int *indices_rw, const int *valid_rw, __half *output_rw, std::vector<int> spatialShape_rw,
+                        int max_voxels, int batch_size, int num_features)
 {
     int blockSize;   // The launch configurator returned block size
     int minGridSize; // The minimum grid size needed to achieve the
                         // maximum occupancy for a full device launch
     checkCudaErrors(cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, ScatterFP16));
-    minGridSize = std::min(minGridSize, DivUp(num_voxels, blockSize));
+    minGridSize = std::min(minGridSize, DivUp(max_voxels * batch_size, blockSize));
 
-    ScatterFP16<<<minGridSize, blockSize>>>(features_rw, indices_rw, output_rw, spatialShape_rw[0], spatialShape_rw[1], spatialShape_rw[2], num_voxels, num_features);
+    ScatterFP16<<<minGridSize, blockSize>>>(features_rw, indices_rw, valid_rw, output_rw, spatialShape_rw[0], spatialShape_rw[1], spatialShape_rw[2], max_voxels, batch_size, num_features);
     cudaDeviceSynchronize();
 
 }

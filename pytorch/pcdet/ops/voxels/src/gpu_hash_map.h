@@ -22,7 +22,7 @@ static inline int DivUp(int a, int b) { return (a + b - 1) / b; }
 struct __align__(4) HashEntry
 {
     int nextId;
-    int4 intCoor;
+    int3 intCoor;
 };
 
 

@@ -172,8 +172,8 @@ Status parseGraph(IImporterContext* ctx, const ::ONNX_NAMESPACE::GraphProto& gra
         {
             const auto& outputName = node.output(i);
             auto& output = outputs.at(i);
-            std::cout << "--- after parse model1  " << " " << node.op_type() <<  "  " << node.output().size() << "  " << outputName << std::endl;
-            std::cout << "--- after parse model2  " << output.shape() << std::endl;
+            // std::cout << "--- after parse model1  " << " " << node.op_type() <<  "  " << node.output().size() << "  " << outputName << std::endl;
+            // std::cout << "--- after parse model2  " << output.shape() << std::endl;
             ssOutputs << "[" << outputName << " -> " << output.shape() << "], ";
             // Note: This condition is to allow ONNX outputs to be ignored
             // Always register output weights (even empty ones) as it may be mapped to an unused input

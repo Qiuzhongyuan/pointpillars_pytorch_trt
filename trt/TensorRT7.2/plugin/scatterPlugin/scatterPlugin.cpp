@@ -36,16 +36,14 @@ PluginFieldCollection DensePluginCreator::mFC{};
 std::vector<PluginField> DensePluginCreator::mPluginAttributes;
 
 
-Dense::Dense(int batch_size, std::vector<int> spatialShape, int channels, int use_fp16)
-    : _batch_size(batch_size), _spatialShape(spatialShape), _channels(channels), _use_fp16(use_fp16)
+Dense::Dense(std::vector<int> spatialShape, int use_fp16)
+    : _spatialShape(spatialShape), _use_fp16(use_fp16)
 {
 }
 
 Dense::Dense(const void* data, size_t length)
 {
-    deserialize_value(&data, &length, &_batch_size);
     deserialize_value(&data, &length, &_spatialShape);
-    deserialize_value(&data, &length, &_channels);
     deserialize_value(&data, &length, &_use_fp16);
 
 }
@@ -61,10 +59,13 @@ int Dense::getNbOutputs() const
 
 DimsExprs Dense::getOutputDimensions(int index, const DimsExprs* inputs, int nbInputDims, nvinfer1::IExprBuilder& exprBuilder)
 {
+    int num_features = (inputs[0].d[1])->getConstantValue();
+    int batch_size = (inputs[2].d[0])->getConstantValue();
+
     nvinfer1::DimsExprs outdims;
     outdims.nbDims = 5;
-    outdims.d[0] = exprBuilder.constant(_batch_size);
-    outdims.d[1] = exprBuilder.constant(_channels);
+    outdims.d[0] = exprBuilder.constant(batch_size);
+    outdims.d[1] = exprBuilder.constant(num_features);
     outdims.d[2] = exprBuilder.constant(_spatialShape[0]);
     outdims.d[3] = exprBuilder.constant(_spatialShape[1]);
     outdims.d[4] = exprBuilder.constant(_spatialShape[2]);
@@ -92,36 +93,39 @@ int Dense::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     Dims featuredims = inputDesc[0].dims;
     int num_voxels = featuredims.d[0];
     int num_features = featuredims.d[1];
-    size_t outsize = _batch_size*_channels*_spatialShape[0]*_spatialShape[1]*_spatialShape[2];
+    Dims validims = inputDesc[2].dims;
+    int batch_size = validims.d[0];
+    int max_voxels = num_voxels / batch_size;
+
+    size_t outsize = batch_size*num_features*_spatialShape[0]*_spatialShape[1]*_spatialShape[2];
 
     int const* indices_rw = reinterpret_cast<int const*>(inputs[1]);
+    int const* valid_rw = reinterpret_cast<int const*>(inputs[2]);
 
-
-#ifdef USE_FP16
+    if (_use_fp16){
         __half const* features_rw = reinterpret_cast<__half const*>(inputs[0]);
         __half* output_rw   = reinterpret_cast<__half*>(outputs[0]);
         init_float_half(output_rw, (__half)0.0, outsize);
-	    DenseSpace::cuda_scatter_fp16(features_rw, indices_rw, output_rw, _spatialShape, num_voxels, num_features);
-#else
+	    DenseSpace::cuda_scatter_fp16(features_rw, indices_rw, valid_rw, output_rw, _spatialShape, max_voxels, batch_size, num_features);
+
+    }else{
         float const* features_rw = reinterpret_cast<float const*>(inputs[0]);
         float* output_rw   = reinterpret_cast<float*>(outputs[0]);
         init_float(output_rw, 0, outsize);
-        DenseSpace::cuda_scatter(features_rw, indices_rw, output_rw, _spatialShape, num_voxels, num_features);
+        DenseSpace::cuda_scatter(features_rw, indices_rw, valid_rw, output_rw, _spatialShape, max_voxels, batch_size, num_features);
+    }
 
-#endif
     return 0;
 }
 
 size_t Dense::getSerializationSize() const
 {
-    return serialized_size(_batch_size) + serialized_size(_spatialShape) + serialized_size(_channels) + serialized_size(_use_fp16);
+    return serialized_size(_spatialShape) + serialized_size(_use_fp16);
 }
 
 void Dense::serialize(void* buffer) const
 {
-    serialize_value(&buffer, _batch_size);
     serialize_value(&buffer, _spatialShape);
-    serialize_value(&buffer, _channels);
     serialize_value(&buffer, _use_fp16);
 }
 
@@ -129,8 +133,27 @@ bool Dense::supportsFormatCombination(
     int pos, const nvinfer1::PluginTensorDesc* inOut, int nbInputs, int nbOutputs)
 {
     ASSERT(inOut && pos < (nbInputs + nbOutputs));
-    return ((inOut[pos].type == nvinfer1::DataType::kFLOAT || inOut[pos].type == nvinfer1::DataType::kHALF || inOut[pos].type == nvinfer1::DataType::kINT32)
-        && inOut[pos].format == nvinfer1::PluginFormat::kNCHW);// && inOut[pos].type == inOut[0].type);
+    const auto* in = inOut;
+    const auto* out = inOut + nbInputs;
+    switch (pos)
+    {
+        case 0: 
+            if (_use_fp16){
+                return in[0].type == nvinfer1::DataType::kHALF   && in[0].format == TensorFormat::kLINEAR;
+            }else{
+                return in[0].type == nvinfer1::DataType::kFLOAT  && in[0].format == TensorFormat::kLINEAR;
+            }
+        case 3: 
+            if (_use_fp16){
+                return out[0].type == nvinfer1::DataType::kHALF  && out[0].format == TensorFormat::kLINEAR;
+            }else{
+                return out[0].type == nvinfer1::DataType::kFLOAT && out[0].format == TensorFormat::kLINEAR;
+            }
+
+        case 1: return in[1].type == nvinfer1::DataType::kINT32  && in[1].format == TensorFormat::kLINEAR;
+        case 2: return in[2].type == nvinfer1::DataType::kINT32  && in[2].format == TensorFormat::kLINEAR;
+    }
+    printf("invalid connection number\n");
 }
 
 const char* Dense::getPluginType() const
@@ -151,7 +174,7 @@ void Dense::destroy()
 IPluginV2DynamicExt* Dense::clone() const
 {
     auto* plugin
-        = new Dense(_batch_size, _spatialShape, _channels, _use_fp16);
+        = new Dense(_spatialShape, _use_fp16);
     plugin->setPluginNamespace(mPluginNamespace);
     return plugin;
 }
@@ -170,7 +193,11 @@ const char* Dense::getPluginNamespace() const
 // Return the DataType of the plugin output at the requested index
 DataType Dense::getOutputDataType(int index, const nvinfer1::DataType* inputTypes, int nbInputs) const
 {
-    return DataType::kFLOAT;
+    if (_use_fp16){
+        return DataType::kHALF;
+    }else{
+        return DataType::kFLOAT;
+    }
 }
 
 // Attach the plugin object to an execution context and grant the plugin the access to some context resource.
@@ -192,9 +219,7 @@ void Dense::configurePlugin(const nvinfer1::DynamicPluginTensorDesc* in, int nbI
 
 DensePluginCreator::DensePluginCreator()
 {
-    mPluginAttributes.emplace_back(PluginField("batch_size", nullptr, PluginFieldType::kINT32, 1));
     mPluginAttributes.emplace_back(PluginField("spatialShape", nullptr, PluginFieldType::kFLOAT32, 3));
-    mPluginAttributes.emplace_back(PluginField("channels", nullptr, PluginFieldType::kINT32, 1));
     mPluginAttributes.emplace_back(PluginField("use_fp16", nullptr, PluginFieldType::kINT32, 1));
 
     mFC.nbFields = mPluginAttributes.size();
@@ -218,20 +243,13 @@ const PluginFieldCollection* DensePluginCreator::getFieldNames()
 
 IPluginV2DynamicExt* DensePluginCreator::createPlugin(const char* name, const PluginFieldCollection* fc)
 {
-    int batch_size;
     std::vector<int> spatialShape;
-    int channels;
     int use_fp16;
     const PluginField* fields = fc->fields;
     for (int i = 0; i < fc->nbFields; ++i)
     {
         const char* attrName = fields[i].name;
-        if (!strcmp(attrName, "batch_size"))
-        {
-            ASSERT(fields[i].type == PluginFieldType::kINT32);
-            batch_size = *(static_cast<const int*>(fields[i].data));
-        }
-        else if (!strcmp(attrName, "spatialShape"))
+        if (!strcmp(attrName, "spatialShape"))
         {
             const int size = fields[i].length;
             const int* a = reinterpret_cast<const int*>(fields[i].data);
@@ -241,11 +259,6 @@ IPluginV2DynamicExt* DensePluginCreator::createPlugin(const char* name, const Pl
                 // a++;
             }
         }
-        else if (!strcmp(attrName, "channels"))
-        {
-            ASSERT(fields[i].type == PluginFieldType::kINT32);
-            channels = *(static_cast<const int*>(fields[i].data));
-        }
         else if (!strcmp(attrName, "use_fp16"))
         {
             ASSERT(fields[i].type == PluginFieldType::kINT32);
@@ -253,7 +266,7 @@ IPluginV2DynamicExt* DensePluginCreator::createPlugin(const char* name, const Pl
         }
     }
 
-    auto* plugin = new Dense(batch_size, spatialShape, channels, use_fp16);
+    auto* plugin = new Dense(spatialShape, use_fp16);
     plugin->setPluginNamespace(mNamespace.c_str());
     return plugin;
 }

@@ -41,9 +41,10 @@ PluginFieldCollection VoxelGeneratorV1PluginCreator::mFC{};
 std::vector<PluginField> VoxelGeneratorV1PluginCreator::mPluginAttributes;
 
 
-VoxelGeneratorV1::VoxelGeneratorV1(int batch_size, int max_num_points, int max_voxels, std::vector<float> point_cloud_range, std::vector<float> voxel_size, int center_offset, int cluster_offset, int supplement)
-    : _batch_size(batch_size), _max_num_points(max_num_points), _max_voxels(max_voxels), _point_cloud_range(point_cloud_range), _voxel_size(voxel_size), _center_offset(center_offset),
-     _cluster_offset(cluster_offset), _supplement(supplement)
+VoxelGeneratorV1::VoxelGeneratorV1(int batch_size, int max_num_points, int max_voxels, std::vector<float> point_cloud_range, std::vector<float> voxel_size, 
+                                   int center_offset, int cluster_offset, int supplement, int use_fp16)
+    : _batch_size(batch_size), _max_num_points(max_num_points), _max_voxels(max_voxels), _point_cloud_range(point_cloud_range), _voxel_size(voxel_size),
+     _center_offset(center_offset), _cluster_offset(cluster_offset), _supplement(supplement), _use_fp16(use_fp16)
 {
 }
 
@@ -57,6 +58,7 @@ VoxelGeneratorV1::VoxelGeneratorV1(const void* data, size_t length)
     deserialize_value(&data, &length, &_point_cloud_range);
     deserialize_value(&data, &length, &_voxel_size);
     deserialize_value(&data, &length, &_supplement);
+    deserialize_value(&data, &length, &_use_fp16);
 }
 
 VoxelGeneratorV1::~VoxelGeneratorV1()
@@ -71,7 +73,7 @@ int VoxelGeneratorV1::getNbOutputs() const
 DimsExprs VoxelGeneratorV1::getOutputDimensions(int index, const DimsExprs* inputs, int nbInputDims, nvinfer1::IExprBuilder& exprBuilder)
 {
     int inCols = inputs[0].d[inputs[0].nbDims - 1]->getConstantValue();
-    int numfeature = inCols - 1;
+    int numfeature = inCols;
     int outfeature = numfeature;
     if (_center_offset!=0){
         outfeature+=3;
@@ -91,21 +93,23 @@ DimsExprs VoxelGeneratorV1::getOutputDimensions(int index, const DimsExprs* inpu
         nvinfer1::DimsExprs coorsDims;
         coorsDims.nbDims = 2;
         coorsDims.d[0] = exprBuilder.constant(_max_voxels*_batch_size);
-        coorsDims.d[1] = exprBuilder.constant(4);
+        coorsDims.d[1] = exprBuilder.constant(3);
         return coorsDims;
     }
     else if (index == 2){
-        nvinfer1::DimsExprs nppvDims;
-        nppvDims.nbDims = 1;
-        nppvDims.d[0] = exprBuilder.constant(_max_voxels*_batch_size);
-        return nppvDims;
-    }
-    else if (index == 3){
         nvinfer1::DimsExprs voDims;
         voDims.nbDims = 1;
         voDims.d[0] = exprBuilder.constant(_batch_size);
         return voDims;
     }
+    else if (index == 3){
+        nvinfer1::DimsExprs nppvDims;
+        nppvDims.nbDims = 1;
+        nppvDims.d[0] = exprBuilder.constant(_max_voxels*_batch_size);
+        return nppvDims;
+    }
+
+    
 }
 
 int VoxelGeneratorV1::initialize()
@@ -125,7 +129,7 @@ size_t VoxelGeneratorV1::getWorkspaceSize(const nvinfer1::PluginTensorDesc* inpu
     }
     
     float bev_map = (float)(grid_size[0] * grid_size[1] * sizeof(float)) / 1024 / 1024;
-    int value_map_z = 40.0 / bev_map;//限制映射图的尺寸，超过40M只用一层
+    int value_map_z = 40.0 / bev_map;
 
     value_map_z = std::max(value_map_z, 1);
     value_map_z = std::min(value_map_z, grid_size[2]);
@@ -133,8 +137,10 @@ size_t VoxelGeneratorV1::getWorkspaceSize(const nvinfer1::PluginTensorDesc* inpu
 
     Dims indim = inputs[0].dims;
     size_t N = indim.d[0];
+
+    const int listBytes = N * sizeof(VoxelGeneratorV1Space::HashEntry);
     
-    size_t totalSize = _batch_size*sizeof(int)*mapsize + _batch_size*sizeof(int)*_max_voxels;
+    size_t totalSize = _batch_size*sizeof(int)*mapsize + _batch_size*sizeof(int)*_max_voxels + listBytes;
     return totalSize;
 }
 
@@ -143,14 +149,13 @@ int VoxelGeneratorV1::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     cudaStream_t stream)
 {    
     cudaDeviceSynchronize();
-    //auto t1=std::chrono::steady_clock::now();
     
     int const* ValidInput = static_cast<int const*>(inputs[1]);
     
     Dims points_dim = inputDesc[0].dims;
     int N = points_dim.d[0];
     int inCols = points_dim.d[1];
-    int num_features = inCols-1;
+    int num_features = inCols;
 
 	int outCols = num_features;
     if(_center_offset!=0) outCols +=3;
@@ -163,28 +168,25 @@ int VoxelGeneratorV1::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
         grid_size[i] = round((_point_cloud_range[3 + i] - _point_cloud_range[i]) / _voxel_size[i]);
     }
 
-    int cuda_idx = 0;
-
     int *coors = static_cast<int*>(outputs[1]);
-    int *num_points_per_voxel = static_cast<int*>(outputs[2]);
-    int *ValidOutput = static_cast<int*>(outputs[3]);
+    int *ValidOutput = static_cast<int*>(outputs[2]);
+    int *num_points_per_voxel = static_cast<int*>(outputs[3]);
 
-    init_int_(coors, -1, _max_voxels*_batch_size*4);
+    init_int_(coors, -1, _max_voxels*_batch_size*3);
     init_int_(num_points_per_voxel, 0, _max_voxels*_batch_size);
     init_int_(ValidOutput, 0, _batch_size);
 
     float bev_map = (float)(grid_size[0] * grid_size[1] * sizeof(float)) / 1024 / 1024;
-    int value_map_z = 40.0 / bev_map;//限制映射图的尺寸，超过40M只用一层
+    int value_map_z = 40.0 / bev_map;
 
     value_map_z = std::max(value_map_z, 1);
     value_map_z = std::min(value_map_z, grid_size[2]);
     int mapsize = grid_size[0] * grid_size[1] * value_map_z;
 
 
-    //for CSR
-
     void* map_tensor_v = workspace;
     void* addr_tensor_v = workspace + sizeof(int)*mapsize*_batch_size;
+    void* list_tensor_v = workspace + sizeof(int)*mapsize*_batch_size + _batch_size*sizeof(int)*_max_voxels;
 
     int* map_tensor = static_cast<int*>(map_tensor_v);
     int* addr_tensor = static_cast<int*>(addr_tensor_v);
@@ -192,38 +194,33 @@ int VoxelGeneratorV1::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     init_int_(map_tensor, -1, _batch_size*mapsize);
     init_int_(addr_tensor, -1, _batch_size*_max_voxels);
 
-    const int listBytes = N * sizeof(VoxelGeneratorSpace::HashEntry);
-    int* list_tensor = nullptr;
-    LOG_ERROR(cudaMalloc((void**)&list_tensor, sizeof(int)*(listBytes/4)));
-    LOG_ERROR(cudaMemset(list_tensor, 0, sizeof(int)*(listBytes/4)));
-    VoxelGeneratorSpace::HashEntry* list_tensor_rw = reinterpret_cast<VoxelGeneratorSpace::HashEntry*>(list_tensor);
+    VoxelGeneratorV1Space::HashEntry* list_tensor_rw = reinterpret_cast<VoxelGeneratorV1Space::HashEntry*>(list_tensor_v);
 
 
-#ifdef USE_FP16
+    if (_use_fp16){
         __half const* points = static_cast<__half const*>(inputs[0]);
         __half* voxels = static_cast<__half*>(outputs[0]);
         init_float_half(voxels, (__half)0.0, _max_voxels*_batch_size*_max_num_points*outCols);
-        VoxelGeneratorSpace::cuda_points_to_voxel_fp16(points, ValidInput,
+        VoxelGeneratorV1Space::cuda_points_to_voxel_fp16(points, ValidInput,
                                             coors, num_points_per_voxel, voxels, ValidOutput,
                                             map_tensor, addr_tensor, list_tensor_rw,
                                             _point_cloud_range, _voxel_size, grid_size,
                                             _batch_size, N, inCols, outCols,
                                             _cluster_offset, _center_offset, _supplement, _max_voxels, 
                                             _max_num_points, value_map_z);
-#else
-
+    }else{
         float const* points = static_cast<float const*>(inputs[0]);
         float *voxels = static_cast<float*>(outputs[0]);
         init_float(voxels, 0.0, _max_voxels*_batch_size*_max_num_points*outCols);
-        VoxelGeneratorSpace::cuda_points_to_voxel(points, ValidInput,
+        VoxelGeneratorV1Space::cuda_points_to_voxel(points, ValidInput,
                                                    coors, num_points_per_voxel, voxels, ValidOutput,
                                                    map_tensor, addr_tensor, list_tensor_rw,
                                                    _point_cloud_range, _voxel_size, grid_size,
                                                    _batch_size, N, inCols, outCols,
                                                    _cluster_offset, _center_offset, _supplement, _max_voxels, 
                                                    _max_num_points, value_map_z);
-#endif
-    LOG_ERROR(cudaFree(list_tensor));
+    }
+        
     cudaDeviceSynchronize();
     return 0;
 }
@@ -231,7 +228,7 @@ int VoxelGeneratorV1::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
 size_t VoxelGeneratorV1::getSerializationSize() const
 {
     return serialized_size(_batch_size) + serialized_size(_max_num_points) + serialized_size(_cluster_offset) + serialized_size(_center_offset) +
-    serialized_size(_max_voxels) + serialized_size(_point_cloud_range) + serialized_size(_voxel_size) + serialized_size(_supplement);
+    serialized_size(_max_voxels) + serialized_size(_point_cloud_range) + serialized_size(_voxel_size) + serialized_size(_supplement) + serialized_size(_use_fp16);
 }
 
 void VoxelGeneratorV1::serialize(void* buffer) const
@@ -239,19 +236,41 @@ void VoxelGeneratorV1::serialize(void* buffer) const
     serialize_value(&buffer, _batch_size);
     serialize_value(&buffer, _max_num_points);
     serialize_value(&buffer, _max_voxels);
+    serialize_value(&buffer, _center_offset);
+    serialize_value(&buffer, _cluster_offset);
     serialize_value(&buffer, _point_cloud_range);
     serialize_value(&buffer, _voxel_size);
-    serialize_value(&buffer, _cluster_offset);
-    serialize_value(&buffer, _center_offset);
     serialize_value(&buffer, _supplement);
+    serialize_value(&buffer, _use_fp16);
 }
 
 bool VoxelGeneratorV1::supportsFormatCombination(
     int pos, const nvinfer1::PluginTensorDesc* inOut, int nbInputs, int nbOutputs)
 {
     ASSERT(inOut && pos < (nbInputs + nbOutputs));
-    return ((inOut[pos].type == nvinfer1::DataType::kFLOAT || inOut[pos].type == nvinfer1::DataType::kHALF  || inOut[pos].type == nvinfer1::DataType::kINT32)
-        && inOut[pos].format == nvinfer1::PluginFormat::kNCHW); // && inOut[pos].type == inOut[0].type);
+    const auto* in = inOut;
+    const auto* out = inOut + nbInputs;
+    switch (pos)
+    {
+        case 0: 
+            if (_use_fp16){
+                return in[0].type == nvinfer1::DataType::kHALF   && in[0].format == TensorFormat::kLINEAR;
+            }else{
+                return in[0].type == nvinfer1::DataType::kFLOAT  && in[0].format == TensorFormat::kLINEAR;
+            }
+        case 2: 
+            if (_use_fp16){
+                return out[0].type == nvinfer1::DataType::kHALF  && out[0].format == TensorFormat::kLINEAR;
+            }else{
+                return out[0].type == nvinfer1::DataType::kFLOAT && out[0].format == TensorFormat::kLINEAR;
+            }
+
+        case 1: return in[1].type == nvinfer1::DataType::kINT32  && in[1].format == TensorFormat::kLINEAR;
+        case 3: return out[1].type == nvinfer1::DataType::kINT32 && out[1].format == TensorFormat::kLINEAR;
+        case 4: return out[2].type == nvinfer1::DataType::kINT32 && out[2].format == TensorFormat::kLINEAR;
+        case 5: return out[3].type == nvinfer1::DataType::kINT32 && out[3].format == TensorFormat::kLINEAR;
+    }
+    printf("invalid connection number\n");
 }
 
 const char* VoxelGeneratorV1::getPluginType() const
@@ -272,7 +291,7 @@ void VoxelGeneratorV1::destroy()
 IPluginV2DynamicExt* VoxelGeneratorV1::clone() const
 {
     auto* plugin
-        = new VoxelGeneratorV1(_batch_size, _max_num_points, _max_voxels, _point_cloud_range, _voxel_size, _center_offset, _cluster_offset, _supplement);
+        = new VoxelGeneratorV1(_batch_size, _max_num_points, _max_voxels, _point_cloud_range, _voxel_size, _center_offset, _cluster_offset, _supplement, _use_fp16);
     plugin->setPluginNamespace(mPluginNamespace);
     return plugin;
 }
@@ -299,7 +318,11 @@ DataType VoxelGeneratorV1::getOutputDataType(int index, const nvinfer1::DataType
     //     return DataType::kFLOAT;
     // }
     if (index == 0){
-        return DataType::kFLOAT;
+        if (_use_fp16){
+            return DataType::kHALF;
+        }else{
+            return DataType::kFLOAT;
+        }
     }else if (index == 1){
         return DataType::kINT32;
     }else if (index == 2){
@@ -336,6 +359,7 @@ VoxelGeneratorV1PluginCreator::VoxelGeneratorV1PluginCreator()
     mPluginAttributes.emplace_back(PluginField("center_offset", nullptr, PluginFieldType::kINT32, 1));
     mPluginAttributes.emplace_back(PluginField("cluster_offset", nullptr, PluginFieldType::kINT32, 1));
     mPluginAttributes.emplace_back(PluginField("supplement", nullptr, PluginFieldType::kINT32, 1));
+    mPluginAttributes.emplace_back(PluginField("use_fp16", nullptr, PluginFieldType::kINT32, 1));
 
     mFC.nbFields = mPluginAttributes.size();
     mFC.fields = mPluginAttributes.data();
@@ -364,6 +388,7 @@ IPluginV2DynamicExt* VoxelGeneratorV1PluginCreator::createPlugin(const char* nam
     int center_offset;
     int cluster_offset;
     int supplement;
+    int use_fp16;
     std::vector<float> point_cloud_range;
     std::vector<float> voxel_size;
     const PluginField* fields = fc->fields;
@@ -395,6 +420,11 @@ IPluginV2DynamicExt* VoxelGeneratorV1PluginCreator::createPlugin(const char* nam
             ASSERT(fields[i].type == PluginFieldType::kINT32);
             supplement = *(static_cast<const int*>(fields[i].data));
         }
+        else if (!strcmp(attrName, "use_fp16"))
+        {
+            ASSERT(fields[i].type == PluginFieldType::kINT32);
+            use_fp16 = *(static_cast<const int*>(fields[i].data));
+        }
         else if (!strcmp(attrName, "max_voxels"))
         {
             ASSERT(fields[i].type == PluginFieldType::kINT32);
@@ -422,7 +452,7 @@ IPluginV2DynamicExt* VoxelGeneratorV1PluginCreator::createPlugin(const char* nam
         }
     }
 
-    auto* plugin = new VoxelGeneratorV1(batch_size, max_num_points, max_voxels, point_cloud_range, voxel_size, center_offset, cluster_offset, supplement);
+    auto* plugin = new VoxelGeneratorV1(batch_size, max_num_points, max_voxels, point_cloud_range, voxel_size, center_offset, cluster_offset, supplement, use_fp16);
     plugin->setPluginNamespace(mNamespace.c_str());
     return plugin;
 }

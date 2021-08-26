@@ -1,3 +1,3 @@
-from .ops import Dense
+from .ops import dense
 
-__all__ = ['Dense']
+__all__ = ['dense']

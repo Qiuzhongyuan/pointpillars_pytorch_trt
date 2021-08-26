@@ -31,6 +31,13 @@ size_t detectionInferenceWorkspaceSize(bool shareLocation, int N, int C1, int C2
     return calculateTotalWorkspaceSize(wss, 7);
 }
 
+int DivUp(int a, int b){ 
+    return (a + b - 1) / b; 
+}
+
+
+
+
 namespace nvinfer1
 {
 namespace plugin

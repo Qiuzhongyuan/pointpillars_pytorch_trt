@@ -21,33 +21,77 @@
 
 #define CUDA_MEM_ALIGN 256
 
+__global__ static void float2half_kernel(float *in, __half *out, int size){
+    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for(int i = idx; i < size; i += stride)
+    {
+        out[idx] = __float2half(in[idx]);
+    }
+}
+
+void float2half_custom(float *in, __half *out, int size){
+    int blockSize;   // The launch configurator returned block size
+    int minGridSize; 
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, float2half_kernel, 0, size);
+    minGridSize = std::min(minGridSize, DivUp(size, blockSize));
+    float2half_kernel<<<minGridSize, blockSize>>>(in, out, size);
+}
+
+
+__global__ static void half2float_kernel(const __half *in, float *out, int size){
+    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for(int i = idx; i < size; i += stride)
+    {
+        out[idx] = __half2float(in[idx]);
+    }
+}
+
+void half2float_custom(const __half *in, float *out, int size){
+    int blockSize;   // The launch configurator returned block size
+    int minGridSize; 
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, half2float_kernel, 0, size);
+    minGridSize = std::min(minGridSize, DivUp(size, blockSize));
+    half2float_kernel<<<minGridSize, blockSize>>>(in, out, size);
+}
+
+__global__ void init_float_half_kernel(__half *input, __half value, int size){
+    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for(int i = idx; i < size; i += stride)
+    {
+        input[i] = value;
+    }
+}
+
+void init_float_half(__half *input, __half value, int size){
+    int blockSize;   // The launch configurator returned block size
+    int minGridSize; 
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, init_float_half_kernel, 0, size);
+    minGridSize = std::min(minGridSize, DivUp(size, blockSize));
+    init_float_half_kernel<<<minGridSize, blockSize>>>(input, value, size);
+}
+
 __global__ void init_int_kernel(int *input, int value, int size){
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if(i>=size)
-        return;
-    input[i] = value;
+    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for(int i = idx; i < size; i += stride)
+    {
+        input[i] = value;
+    }
 }
 
 void init_int_(int *input, int value, int size) {
-    int BLOCK_X =512;
-    int block_x1 = (size > BLOCK_X) ? BLOCK_X : size;
-    int grid_x1 = (size - 1) / block_x1 + 1;
-    init_int_kernel<<<grid_x1, block_x1>>>(input, value, size);
-
-}
-
-__global__ void init_zeros_kernel(float *input, float value, int size){
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if(i>=size)
-        return;
-    input[i] = value;
-}
-
-void init_zeros(float *input, float value, int size) {
-    int BLOCK_X =512;
-    int block_x1 = (size > BLOCK_X) ? BLOCK_X : size;
-    int grid_x1 = (size - 1) / block_x1 + 1;
-    init_zeros_kernel<<<grid_x1, block_x1>>>(input, value, size);
+    int blockSize;   // The launch configurator returned block size
+    int minGridSize; 
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, init_int_kernel, 0, size);
+    minGridSize = std::min(minGridSize, DivUp(size, blockSize));
+    init_int_kernel<<<minGridSize, blockSize>>>(input, value, size);
 }
 
 __global__ void init_float_kernel(float *input, float value, int size){
@@ -64,71 +108,10 @@ void init_float(float *input, float value, int size){
     int blockSize;   // The launch configurator returned block size
     int minGridSize; 
     cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, init_float_kernel, 0, size);
-    minGridSize = std::min(minGridSize, divup(size, blockSize));
+    minGridSize = std::min(minGridSize, DivUp(size, blockSize));
     init_float_kernel<<<minGridSize, blockSize>>>(input, value, size);
 }
 
-
-__global__ void init_float_half_kernel(__half *input, __half value, int size){
-    int idx    = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for(int i = idx; i < size; i += stride)
-    {
-        input[i] = value;
-    }
-}
-
-void init_float_half(__half *input, __half value, int size){
-    int blockSize;   // The launch configurator returned block size
-    int minGridSize; 
-    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, init_float_half_kernel, 0, size);
-    minGridSize = std::min(minGridSize, divup(size, blockSize));
-    init_float_half_kernel<<<minGridSize, blockSize>>>(input, value, size);
-}
-
-template<typename T> 
-__global__ void init_temp_kernel(T *input, T value, int size){
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if(i>=size)
-        return;
-    input[i] = value;
-}
-
-template<typename T> void init_temp(T* input, T value, int size){
-    int BLOCK_X =512;
-    int block_x1 = (size > BLOCK_X) ? BLOCK_X : size;
-    int grid_x1 = (size - 1) / block_x1 + 1;
-    init_temp_kernel<<<grid_x1, block_x1>>>(input, value, size);
-}
-
-
-__global__ static void float2half_kernel(float *in, __half *out, int num){
-    int box_index = threadIdx.x + blockIdx.x * blockDim.x;
-    if(box_index>=num)
-        return;
-    out[box_index] = __float2half(in[box_index]);
-}
-
-void float2half_custom(float *in, __half *out, int num){
-    int block_x_mask = (num > 512) ? 512 : num;
-    int grid_x_mask = (num - 1) / block_x_mask + 1;
-    float2half_kernel<<<grid_x_mask, block_x_mask>>>(in, out, num);
-}
-
-
-__global__ static void half2float_kernel(const __half *in, float *out, int num){
-    int box_index = threadIdx.x + blockIdx.x * blockDim.x;
-    if(box_index>=num)
-        return;
-    out[box_index] = __half2float(in[box_index]);
-}
-
-void half2float_custom(const __half *in, float *out, int num){
-    int block_x_mask = (num > 512) ? 512 : num;
-    int grid_x_mask = (num - 1) / block_x_mask + 1;
-    half2float_kernel<<<grid_x_mask, block_x_mask>>>(in, out, num);
-}
 
 // HASH 
 unsigned int hash(const void* array_, size_t size)

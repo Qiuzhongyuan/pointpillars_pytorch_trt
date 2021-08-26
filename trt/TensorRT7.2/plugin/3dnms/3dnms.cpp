@@ -118,7 +118,6 @@ size_t NMS3D::getWorkspaceSize(const nvinfer1::PluginTensorDesc* inputs, int nbI
     }
     size_t totalsize = sizeof(int)*num_box + sizeof(float)*num_box + sizeof(int)*num_box + sizeof(int)*_nms_pre_maxsize +
      sizeof(int)*_nms_pre_maxsize*(num_out_info-2) + sizeof(int)*batch_size*2 + sizeof(float)*_nms_pre_maxsize*_nms_pre_maxsize;
-
     return totalsize;
 }
 
@@ -126,8 +125,6 @@ int NMS3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     const nvinfer1::PluginTensorDesc* outputDesc, const void* const* inputs, void* const* outputs, void* workspace,
     cudaStream_t stream)
 {
-    cudaDeviceSynchronize();
-    //auto t1=std::chrono::steady_clock::now();
     Dims batch_box_dims = inputDesc[0].dims;
     Dims batch_cls_dims = inputDesc[1].dims;
     int batch_size = batch_box_dims.d[0];
@@ -142,7 +139,6 @@ int NMS3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
         num_out_info = 6;
     }
 
-
     void* index_v = workspace;
     void* score_v = workspace + sizeof(int)*num_box;
     void* cls_type_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box;
@@ -150,7 +146,7 @@ int NMS3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     void* box_temp_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box*2 + + sizeof(int)*_nms_pre_maxsize;
     void* pos_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box*2 + + sizeof(int)*_nms_pre_maxsize + sizeof(int)*_nms_pre_maxsize*(num_out_info-2);
     void* ious_v = workspace + sizeof(int)*num_box + sizeof(float)*num_box*2 + + sizeof(int)*_nms_pre_maxsize + sizeof(int)*_nms_pre_maxsize*(num_out_info-2) + sizeof(int)*_bs*2;
-
+    
     int* index = static_cast<int*>(index_v);
     float* score = static_cast<float*>(score_v);
     int* cls_type = static_cast<int*>(cls_type_v);
@@ -160,17 +156,17 @@ int NMS3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
     float* ious = static_cast<float*>(ious_v);
 
     init_int_(index, 0, num_box*batch_size);
-    init_zeros(score, 0, num_box*batch_size);
+    init_float(score, 0, num_box*batch_size);
     init_int_(cls_type, 0, num_box);
     init_int_(cls_temp, 0, _nms_pre_maxsize);
-    init_zeros(box_temp, 0, _nms_pre_maxsize);
+    init_float(box_temp, 0, _nms_pre_maxsize);
     init_int_(pos, 0, batch_size*2);
-    init_zeros(ious, 0, _nms_pre_maxsize*_nms_pre_maxsize);
+    init_float(ious, 0, _nms_pre_maxsize*_nms_pre_maxsize);
 
     int* validboxes = static_cast<int*>(outputs[1]);
     LOG_ERROR(cudaMemset(validboxes, 0, sizeof(int)*batch_size));
 
-#ifdef USE_FP16
+    if (_use_fp16){
         __half const* batch_box = static_cast<__half const*>(inputs[0]);
         __half const* batch_cls = static_cast<__half const*>(inputs[1]);
         __half* output_feature = static_cast<__half*>(outputs[0]);
@@ -178,17 +174,15 @@ int NMS3D::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
         NMSSpace::cuda_nms_fp16(batch_box, batch_cls, score, cls_type, index, pos, cls_temp, box_temp,
                             ious, output_feature, num_box, num_cls, _nms_pre_maxsize, _nms_post_maxsize, 
                             _nms_thresh, batch_size, _score_thresh, _use_bev, validboxes);
-#else
+    }else{
         float const* batch_box = static_cast<float const*>(inputs[0]);
         float const* batch_cls = static_cast<float const*>(inputs[1]);
         float* output_feature = static_cast<float*>(outputs[0]);
-        init_zeros(output_feature, -1.0, _bs*_nms_post_maxsize*num_out_info);
+        init_float(output_feature, -1.0, _bs*_nms_post_maxsize*num_out_info);
         NMSSpace::cuda_nms(batch_box, batch_cls, score, cls_type, index, pos, cls_temp, box_temp,
                             ious, output_feature, num_box, num_cls, _nms_pre_maxsize, _nms_post_maxsize, _nms_thresh, 
                             batch_size, _score_thresh, _use_bev, validboxes);
-
-#endif
-
+    }
     return 0;
 }
 
@@ -213,8 +207,32 @@ bool NMS3D::supportsFormatCombination(
     int pos, const nvinfer1::PluginTensorDesc* inOut, int nbInputs, int nbOutputs)
 {
     ASSERT(inOut && pos < (nbInputs + nbOutputs));
-    return ((inOut[pos].type == nvinfer1::DataType::kFLOAT || inOut[pos].type == nvinfer1::DataType::kHALF  || inOut[pos].type == nvinfer1::DataType::kINT32)
-        && inOut[pos].format == nvinfer1::PluginFormat::kNCHW); // && inOut[pos].type == inOut[0].type);
+    const auto* in = inOut;
+    const auto* out = inOut + nbInputs;
+    switch (pos)
+    {
+        case 0: 
+            if (_use_fp16){
+                return in[0].type == nvinfer1::DataType::kHALF  && in[0].format == TensorFormat::kLINEAR;
+            }else{
+                return in[0].type == nvinfer1::DataType::kFLOAT && in[0].format == TensorFormat::kLINEAR;
+            }
+        case 1: 
+            if (_use_fp16){
+                return in[1].type == nvinfer1::DataType::kHALF  && in[1].format == TensorFormat::kLINEAR;
+            }else{
+                return in[1].type == nvinfer1::DataType::kFLOAT && in[1].format == TensorFormat::kLINEAR;
+            }
+        case 2: 
+            if (_use_fp16){
+                return out[0].type == nvinfer1::DataType::kHALF  && out[0].format == TensorFormat::kLINEAR;
+            }else{
+                return out[0].type == nvinfer1::DataType::kFLOAT && out[0].format == TensorFormat::kLINEAR;
+            }
+
+        case 3: return out[1].type == nvinfer1::DataType::kINT32 && out[1].format == TensorFormat::kLINEAR;
+    }
+    printf("invalid connection number\n");
 }
 
 const char* NMS3D::getPluginType() const
@@ -255,7 +273,11 @@ const char* NMS3D::getPluginNamespace() const
 DataType NMS3D::getOutputDataType(int index, const nvinfer1::DataType* inputTypes, int nbInputs) const
 {
     if (index == 0){
-        return DataType::kFLOAT;
+        if (_use_fp16){
+            return DataType::kHALF;
+        }else{
+            return DataType::kFLOAT;
+        }
     }else{
         return DataType::kINT32;
     }

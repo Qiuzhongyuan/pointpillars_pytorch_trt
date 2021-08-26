@@ -1,5 +1,5 @@
 DATASET: 'KittiDataset'
-DATA_PATH: '/home/qiuzhongyuan/datasets/kitti/detecction' # '/home/qiuzhongyuan/datasets/kitti/detecction'   '/data/kitti/detecction'
+DATA_PATH: '/data/kitti/detecction' # '/home/qiuzhongyuan/datasets/kitti/detecction'   '/data/kitti/detecction'
 #DATA_PATH: '/workspace/kitti/detection'
 
 POINT_CLOUD_RANGE: [0, -40, -3, 70.4, 40, 1]

@@ -57,13 +57,10 @@ file(GLOB_RECURSE test_source
      Int8EntropyCalibrator.cpp
      cuda_tookit.cu
       test/test.cpp
-     #  plugin/*.cu
-    #  plugin/*.cpp
      )
 
 cuda_add_executable(unit_test ${test_source})
 target_compile_options(unit_test PUBLIC -std=c++11 -Wall -Wfloat-conversion)
-#target_link_libraries(unit_test tinytrt)
 target_link_libraries(unit_test nvinfer)
 target_link_libraries(unit_test nvinfer_plugin)
 target_link_libraries(unit_test nvparsers)
@@ -75,13 +72,6 @@ target_link_libraries(unit_test ${CUDA_CUBLAS_LIBRARIES})
 target_link_libraries(unit_test ${CUDA_curand_LIBRARY})
 target_link_libraries(unit_test ${CUDA_LIBRARIES})
 
-# CUDA_ADD_CUBLAS_TO_TARGET(unit_test)
-
 set_property(TARGET unit_test PROPERTY CXX_STANDARD 14)
 
-#include_directories(/home/nvidia/.local/lib/python3.6/site-packages/torch/include/torch/csrc/api/include)
-#include_directories(/home/nvidia/.local/lib/python3.6/site-packages/torch/include)
-#set(Torch_DIR /home/nvidia/.local/lib/python3.6/site-packages/torch/share/cmake/Torch)
-#find_package(Torch REQUIRED)
-#link_directories(/home/nvidia/.local/lib/python3.6/site-packages/torch/lib)	
 

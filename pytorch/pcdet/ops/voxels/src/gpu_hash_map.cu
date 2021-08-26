@@ -28,22 +28,20 @@ void InitializeMapEntries(const float* __restrict__  points,
 
         const float* cur_point = points + i * cols;
 
-        int bs = __float2int_rd(cur_point[0] + DELTA);
-        int x  = __float2int_rd((cur_point[1] - RangeMinX) / VoxelSizeX);
-        int y  = __float2int_rd((cur_point[2] - RangeMinY) / VoxelSizeY);
-        int z  = __float2int_rd((cur_point[3] - RangeMinZ) / VoxelSizeZ);
+        int x  = __float2int_rd((cur_point[0] - RangeMinX) / VoxelSizeX);
+        int y  = __float2int_rd((cur_point[1] - RangeMinY) / VoxelSizeY);
+        int z  = __float2int_rd((cur_point[2] - RangeMinZ) / VoxelSizeZ);
 
         HashEntry* entry = list + i;
 
-        if(bs!=curBatch || x<0 || y<0 || z<0 || x>=GridX || y>=GridY || z>=GridZ) continue;
+        if(x<0 || y<0 || z<0 || x>=GridX || y>=GridY || z>=GridZ) continue;
 
-        int4 coor;
-        coor.x = bs;
-        coor.y = z;
-        coor.z = y;
-        coor.w = x;
+        int3 coor;
+        coor.x = z;
+        coor.y = y;
+        coor.z = x;
 
-        int hash_idx = bs * GridX * GridY * value_map_z + (int)(z / Intervel_Oz) * GridX * GridY + x * GridY + y;
+        int hash_idx = curBatch * GridX * GridY * value_map_z + (int)(z / Intervel_Oz) * GridX * GridY + x * GridY + y;
 
         entry -> intCoor = coor;
         int* address = map + hash_idx;
@@ -60,9 +58,9 @@ void InitializeMapEntries(const float* __restrict__  points,
 
         if(curVal == -1)
         {
-            int old_num = atomicAdd(validOutputVoxels + bs, 1);
+            int old_num = atomicAdd(validOutputVoxels + curBatch, 1);
             if(old_num < maxOutputVoxels)
-                map_addr[bs * maxOutputVoxels + old_num] = hash_idx;
+                map_addr[curBatch * maxOutputVoxels + old_num] = hash_idx;
         }
     }
 }
@@ -92,22 +90,20 @@ void InitializeMapEntriesFp16(const __half* __restrict__  points,
 
         const __half* cur_point = points + i * cols;
 
-        int bs = __float2int_rd(__half2float(cur_point[0]) + DELTA);
-        int x  = __float2int_rd((__half2float(cur_point[1]) - RangeMinX) / VoxelSizeX);
-        int y  = __float2int_rd((__half2float(cur_point[2]) - RangeMinY) / VoxelSizeY);
-        int z  = __float2int_rd((__half2float(cur_point[3]) - RangeMinZ) / VoxelSizeZ);
+        int x  = __float2int_rd((__half2float(cur_point[0]) - RangeMinX) / VoxelSizeX);
+        int y  = __float2int_rd((__half2float(cur_point[1]) - RangeMinY) / VoxelSizeY);
+        int z  = __float2int_rd((__half2float(cur_point[2]) - RangeMinZ) / VoxelSizeZ);
 
         HashEntry* entry = list + i;
 
-        if(bs!=curBatch || x<0 || y<0 || z<0 || x>=GridX || y>=GridY || z>=GridZ) continue;
+        if(x<0 || y<0 || z<0 || x>=GridX || y>=GridY || z>=GridZ) continue;
 
-        int4 coor;
-        coor.x = bs;
-        coor.y = z;
-        coor.z = y;
-        coor.w = x;
+        int3 coor;
+        coor.x = z;
+        coor.y = y;
+        coor.z = x;
 
-        int hash_idx = bs * GridX * GridY * value_map_z + (int)(z / Intervel_Oz) * GridX * GridY + x * GridY + y;
+        int hash_idx = curBatch * GridX * GridY * value_map_z + (int)(z / Intervel_Oz) * GridX * GridY + x * GridY + y;
 
         entry -> intCoor = coor;
         int* address = map + hash_idx;
@@ -124,9 +120,9 @@ void InitializeMapEntriesFp16(const __half* __restrict__  points,
 
         if(curVal == -1)
         {
-            int old_num = atomicAdd(validOutputVoxels + bs, 1);
+            int old_num = atomicAdd(validOutputVoxels + curBatch, 1);
             if(old_num < maxOutputVoxels)
-                map_addr[bs * maxOutputVoxels + old_num] = hash_idx;
+                map_addr[curBatch * maxOutputVoxels + old_num] = hash_idx;
         }
     }
 }

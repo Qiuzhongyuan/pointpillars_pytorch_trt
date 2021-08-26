@@ -26,13 +26,12 @@ namespace NAMESPACE
     return result;
   }
 
-
-  void cuda_scatter(const float *features_rw, const int *indices_rw, 
+  void cuda_scatter(const float *features_rw, const int *indices_rw, const int *valid_rw,
                   float *output_rw, std::vector<int> spatialShape_rw,
-                  int num_voxels, int num_features);
+                  int max_voxels, int batch_size, int num_features);
 
-  void cuda_scatter_fp16(const __half *features_rw, const int *indices_rw, __half *output_rw, std::vector<int> spatialShape,
-                        int num_voxels, int num_features);
+  void cuda_scatter_fp16(const __half *features_rw, const int *indices_rw, const int *valid_rw, __half *output_rw, std::vector<int> spatialShape,
+                        int max_voxels, int batch_size, int num_features);
 
 
 }// namespace

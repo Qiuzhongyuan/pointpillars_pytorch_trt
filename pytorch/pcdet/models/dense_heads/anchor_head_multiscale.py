@@ -22,6 +22,9 @@ class AnchorHeadMultiScale(AnchorHeadTemplate):
         self.single_head_2 = AnchorHeadSingle(model_cfg, input_channels[1], num_class, class_names, grid_size,
                                               point_cloud_range, predict_boxes_when_training, **kwargs)
 
+        setattr(self.single_head_1, 'ignore_cls', [1, 2])
+        setattr(self.single_head_2, 'ignore_cls', [0])
+
     def forward(self, data_dict):
         spatial_features_2d = data_dict['spatial_features_2d']
         assert len(spatial_features_2d) == 2

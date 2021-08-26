@@ -21,21 +21,64 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
-#include <cuda_fp16.h>
+#include <iostream>
+#include <fstream>
+#include <string>
 
 using namespace nvinfer1;
 using namespace nvinfer1::plugin;
 #define DEBUG_ENABLE 0
 
 #ifndef TRT_RPNLAYER_H
-
-//#define USE_FP16
-
 typedef enum
 {
     NCHW = 0,
     NC4HW = 1
 } DLayout_t;
+
+void init_float(float *input, float value, int size);
+void init_int_(int *input, int value, int size);
+void init_float_half(__half *input, __half value, int size);
+void half2float_custom(const __half *in, float *out, int num);
+void float2half_custom(float *in, __half *out, int num);
+
+int DivUp(int a, int b);
+
+template<typename T>
+void check_points(T* cache, int allsize, int showsize, std::string& outname){
+    T* points_h = (T*)malloc(sizeof(T)*allsize);
+    cudaMemcpy(points_h, cache, sizeof(T)*allsize, cudaMemcpyDeviceToHost);
+    for (int i = 0; i < showsize; i++){
+        std::cout << " ^ " << points_h[i] << " & ";
+    }
+    if (!outname.empty()){
+        std::ofstream outfile;
+        // outfile.open("out.bin", std::ios::binary | std::ios::app);
+        outfile.open(outname.c_str(), std::ios::binary);
+        outfile.write(reinterpret_cast<const char*>(points_h), sizeof(T)*allsize);
+        outfile.close();
+    }
+    std::cout << std::endl;
+    free(points_h);
+}
+
+template<typename T>
+void check_points(const T* cache, int allsize, int showsize, std::string& outname){
+    T* points_h = (T*)malloc(sizeof(T)*allsize);
+    cudaMemcpy(points_h, cache, sizeof(T)*allsize, cudaMemcpyDeviceToHost);
+    for (int i = 0; i < showsize; i++){
+        std::cout << " ^ " << points_h[i] << " & ";
+    }
+    if (!outname.empty()){
+        std::ofstream outfile;
+        // outfile.open("out.bin", std::ios::binary | std::ios::app);
+        outfile.open(outname.c_str(), std::ios::binary);
+        outfile.write(reinterpret_cast<const char*>(points_h), sizeof(T)*allsize);
+        outfile.close();
+    }
+    std::cout << std::endl;
+    free(points_h);
+}
 
 pluginStatus_t allClassNMS(cudaStream_t stream, int num, int num_classes, int num_preds_per_class, int top_k,
     float nms_threshold, bool share_location, bool isNormalized, DataType DT_SCORE, DataType DT_BBOX, void* bbox_data,
@@ -222,19 +265,6 @@ int proposalInference_gpu(cudaStream_t stream, const void* rpn_prob, const void*
 
 size_t _get_workspace_size(int N, int anc_size_num, int anc_ratio_num, int H, int W, int nmsMaxOut);
 
-inline int divup(int a, int b) { return (a + b - 1) / b; }
-
-void init_int_(int *input, int value, int size);
-void init_zeros(float *input, float value, int size);
-void init_float(float *input, float value, int size);
-void init_float_half(__half *input, __half value, int size);
-
-
-
-template<typename T> void init_temp(T* input, T value, int size);
-
-void half2float_custom(const __half *in, float *out, int num);
-void float2half_custom(float *in, __half *out, int num);
 
 #endif // TRT_RPNLAYER_H
 #endif

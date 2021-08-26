@@ -5,8 +5,9 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 #include <cassert>
+#include <kernel.h>
 
-#define DivUp(m, n) ((m) / (n) + ((m) % (n) > 0))
+// #define DivUp(m, n) ((m) / (n) + ((m) % (n) > 0))
 #define NAMESPACE NMSSpace
 #define DEBUG
 

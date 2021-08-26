@@ -168,11 +168,10 @@ class DatasetTemplate(torch_data.Dataset):
                     coors = []
                     max_points = max([len(x) for x in val])
                     for i, coor in enumerate(val):
-                        coor_pad = np.pad(coor, ((0, 0), (1, 0)), mode='constant', constant_values=i)
-                        points = np.zeros((max_points, coor_pad.shape[1]), dtype=np.float32) + i
-                        points[:len(coor_pad)] = coor_pad
+                        points = np.zeros((max_points, coor.shape[1]), dtype=np.float32)
+                        points[:len(coor)] = coor
                         coors.append(points)
-                        valid_num.append(len(coor_pad))
+                        valid_num.append(len(coor))
                     ret[key] = np.concatenate(coors, axis=0)
                     ret['valid_num'] = np.array(valid_num, dtype=np.int32)
 

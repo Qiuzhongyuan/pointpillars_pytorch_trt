@@ -38,6 +38,56 @@
 #include <tuple>
 #include <unordered_set>
 #include <iostream>
+#include <string>
+#include <stdlib.h>  
+#include <libxml/parser.h>  
+
+static int  
+parseDoc() {  
+    // char docname[100] = "/home/nvidia/workspace/yutong/tiny-tensorrt7.2/test.xml";
+    xmlDocPtr doc;  
+    xmlNodePtr cur;  
+    //xmlKeepBlanksDefault(0);  
+    std::string para_path; 
+    para_path = PARAM_XML;
+    // printf("--------hhhhhhhhhh %s\n", para_path.c_str());
+    // std::cout << "---------------------bbb*******8: " << para_path << std::endl;
+    int fp_mode;
+    doc = xmlParseFile(para_path.c_str());  
+  
+    if(doc == NULL) {  
+        fprintf(stderr, "doc error!\n");  
+        return 0;  
+    }  
+  
+    cur = xmlDocGetRootElement(doc);  
+  
+    if(cur == NULL) {  
+        fprintf(stderr, "root error!\n");  
+        xmlFreeDoc(doc);  
+        return 0;  
+    }  
+  
+    if(xmlStrcmp(cur->name, (const xmlChar*)"opencv_storage")) {  
+        printf("end\n");  
+        return 0;  
+    }  
+    int idx = 0;
+    cur = cur->children;  
+    while(cur != NULL) {  
+        // printf("name=%s content=%s\n",cur->name,   
+        //         (char*)xmlNodeGetContent(cur));  
+                //cur->content);  
+        // if ((char*)cur->name == "MODE"){
+        if (idx==7){
+            fp_mode = atoi((char*)xmlNodeGetContent(cur));
+        }
+        idx+=1;
+        cur = cur->next;  
+    }  
+    xmlFreeDoc(doc);  
+    return fp_mode;  
+} 
 
 namespace onnx2trt
 {
@@ -4167,6 +4217,7 @@ DEFINE_BUILTIN_OP_IMPORTER(TRT_AveragePool)
 
 DEFINE_BUILTIN_OP_IMPORTER(VoxelGeneratorV1)
 {
+    int fp_mode = parseDoc();
     // Scales and biases must be initializers
     // nvinfer1::ITensor* tensor_ptr = &convertToTensor(inputs.at(0), ctx);
     OnnxAttrs attrs(node, ctx);
@@ -4174,10 +4225,7 @@ DEFINE_BUILTIN_OP_IMPORTER(VoxelGeneratorV1)
     nvinfer1::Dims inputdim = input0->getDimensions();
     nvinfer1::DataType intype = input0->getType();
     int numfeature = inputdim.d[inputdim.nbDims-1]-1;
-    int use_fp16 = 0;
-    if (intype == nvinfer1::DataType::kHALF){
-        use_fp16 = 1;
-    }
+    int use_fp16 = fp_mode;
 
     int batch_size = attrs.get<int>("batch_size", 0);
     int max_num_points = attrs.get<int>("max_num_points", 0);
@@ -4198,8 +4246,8 @@ DEFINE_BUILTIN_OP_IMPORTER(VoxelGeneratorV1)
     f.emplace_back("voxel_size", voxel_size.data(), nvinfer1::PluginFieldType::kFLOAT32, 3);
     f.emplace_back("center_offset", &center_offset, nvinfer1::PluginFieldType::kINT32, 1);
     f.emplace_back("cluster_offset", &cluster_offset, nvinfer1::PluginFieldType::kINT32, 1);
-    f.emplace_back("use_fp16", &use_fp16, nvinfer1::PluginFieldType::kINT32, 1);
     f.emplace_back("supplement", &supplement, nvinfer1::PluginFieldType::kINT32, 1);
+    f.emplace_back("use_fp16", &use_fp16, nvinfer1::PluginFieldType::kINT32, 1);
 
     // Create plugin from registry
     nvinfer1::IPluginV2* plugin = createPlugin(node.name(), importPluginCreator(pluginName, pluginVersion), f);
@@ -4222,6 +4270,7 @@ DEFINE_BUILTIN_OP_IMPORTER(VoxelGeneratorV1)
 
 DEFINE_BUILTIN_OP_IMPORTER(Dense)
 {
+    int fp_mode = parseDoc();
     // Scales and biases must be initializers
     // nvinfer1::ITensor* tensor_ptr = &convertToTensor(inputs.at(0), ctx);
     OnnxAttrs attrs(node, ctx);
@@ -4229,23 +4278,16 @@ DEFINE_BUILTIN_OP_IMPORTER(Dense)
     nvinfer1::ITensor* input0 = &convertToTensor(inputs.at(0), ctx);
     nvinfer1::Dims inputdim = input0->getDimensions();
     nvinfer1::DataType intype = input0->getType();
-    int use_fp16 = 0;
-    if (intype == nvinfer1::DataType::kHALF){
-        use_fp16 = 1;
-    }
+    int use_fp16 = fp_mode;
 
-    int channels = inputdim.d[inputdim.nbDims-1];
+    // int channels = inputdim.d[inputdim.nbDims-1];
 
-    int batch_size = attrs.get<int>("batch_size", 0);
     std::vector<int> spatialShape = attrs.get<std::vector<int>>("spatialShape");
-    std::cout << "spatialShape: " << spatialShape.size() << std::endl;
     // Populate instanceNormalization plugin properties.
     const std::string pluginName = "Dense";
     const std::string pluginVersion = "001";
     std::vector<nvinfer1::PluginField> f;
-    f.emplace_back("batch_size", &batch_size, nvinfer1::PluginFieldType::kINT32, 1);
     f.emplace_back("spatialShape", spatialShape.data(), nvinfer1::PluginFieldType::kINT32, 3);
-    f.emplace_back("channels", &channels, nvinfer1::PluginFieldType::kINT32, 1);
     f.emplace_back("use_fp16", &use_fp16, nvinfer1::PluginFieldType::kINT32, 1);
 
     // Create plugin from registry
@@ -4270,6 +4312,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Dense)
 
 DEFINE_BUILTIN_OP_IMPORTER(NMS)
 {
+    int fp_mode = parseDoc();
     // Scales and biases must be initializers
     // nvinfer1::ITensor* tensor_ptr = &convertToTensor(inputs.at(0), ctx);
     OnnxAttrs attrs(node, ctx);
@@ -4278,10 +4321,7 @@ DEFINE_BUILTIN_OP_IMPORTER(NMS)
     nvinfer1::Dims inputdim = input0->getDimensions();
     int batch_size = inputdim.d[0];
     nvinfer1::DataType intype = input0->getType();
-    int use_fp16 = 0;
-    if (intype == nvinfer1::DataType::kHALF){
-        use_fp16 = 1;
-    }
+    int use_fp16 = fp_mode;
 
     int nms_post_maxsize = attrs.get<int>("nms_post_maxsize", 0);
     int nms_pre_maxsize = attrs.get<int>("nms_pre_maxsize", 0);
@@ -4304,7 +4344,7 @@ DEFINE_BUILTIN_OP_IMPORTER(NMS)
     nvinfer1::IPluginV2* plugin = createPlugin(node.name(), importPluginCreator(pluginName, pluginVersion), f);
     // nvinfer1::IPluginV2* plugin = importPluginFromRegistry(ctx, pluginName, pluginVersion, node.name(), f);
 
-    ASSERT(plugin != nullptr && "VoxelGeneratorV2 plugin was not found in the plugin registry!",
+    ASSERT(plugin != nullptr && "NMS plugin was not found in the plugin registry!",
         ErrorCode::kUNSUPPORTED_NODE);
 
     std::vector<nvinfer1::ITensor*> intensor;

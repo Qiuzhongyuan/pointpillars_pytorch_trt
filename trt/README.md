@@ -16,19 +16,22 @@ Inside the docker container, run:
 ```bash
 $ apt update
 $ apt install libopencv-dev
+$ apt install libxml2
+$ apt install libxml2-dev
+$ cp -r /usr/include/libxml2/libxml /usr/include/
 ```
 
 ## TensorRT
-
+fp16 mode now is under the inference code`s contral
 ```make tensorrt(add plugin)
 $ cd pointpillars_pytorch_trt/trt/TensorRT7.2
 $ mkdir build
-$ cmake -DUSE_FP16=OFF ..
+$ cmake -DPARAM_PATH="{the absolute path of tiny-tensorrt7.2}/test.xml" ..
 $ make -j12
-$ ./cp.sh
+$ echo "export LD_LIBRARY_PATH={the absolute path of TensorRT7.2}/build/:$LD_LIBRARY_PATH" >> ~/.bashrc
+$ source ~/.bashrc
 ```
 
-Set DUSE_FP16=ON for FP16 inference mode.
 
 ## Tiny-TensorRT
 
@@ -37,7 +40,7 @@ $ cd pointpillars_pytorch_trt/trt/tiny-tensorrt7.2
 $ mkdir build
 $ cmake ..
 $ make -j8
-$ ./unit_test --onnx_path model.onnx --data_path reduce_bin_dir --calibrate_path calibrate_data_dir
+$ ./unit_test --onnx_path model.onnx --data_path reduce_bin_dir
 ```
 
 NOTE:
@@ -54,7 +57,7 @@ $ <MODE>1</MODE>    :: fp16
 ```bash
 $ ./unit_test --onnx_path ../model/pointpillars.onnx --data_path ../bindata
 ```
-Result is saved in "pointpillars_pytorch_trt/trt/tiny-tensorrt7.2/saveint8/".
+Result is saved in "pointpillars_pytorch_trt/trt/tiny-tensorrt7.2/output/".
 
 
 ## Evaluation
@@ -66,19 +69,26 @@ We evaluated the performance on a **2080 TI**. Inference times (in ms) for the o
 | MultiScale model| 24.84 | 11.71 |
 | MultiScale-Pruned model| 8.97 | 7.62 |
 
-We also evaluated the performance on a **Xavier**.
+We also evaluated the performance on **Xavier AGX**.
 
 |  | fp32 | fp16 |
 | :------: | :------: | :------: |
-| MultiScale model| 196.60 | 94.69 |
+| MultiScale model| 190.20 | 94.69 |
 | MultiScale-Pruned model| 62.96 | 43.92 |
+
+and the performance on **Xavier NX**.
+
+|  | fp32 | fp16 |
+| :------: | :------: | :------: |
+| MultiScale model| 320.64 | 148.36 |
+| MultiScale-Pruned model| 89.58 | 66.23 |
 
 Furthermore, we tested the average precision in the BEV perspective (BEV AP) for the categories car, pedestrian, cyclist.
 
 The test environment is the same as [pytorch](../pytorch) .
 ```
 $ cd pointpillars_pytorch_trt/trt/tiny-tensorrt7.2/eval_tools/
-$ python eval_results.py --trt_outputs ../saveint8/ 
+$ python eval_results.py --trt_outputs ../output/ 
 ```
 
 | CAR | fp32 | fp16 |
@@ -98,7 +108,7 @@ $ python eval_results.py --trt_outputs ../saveint8/
 
 ## Contributors
 
-Hao Liu, Chenchen Zhang, Zhongyuan Qiu, Bo Wen. 
+Hao Liu, Zhongyuan Qiu, Chenchen Zhang, Bo Wen. 
 
 [Novauto 超星未来](https://www.novauto.com.cn/)
 

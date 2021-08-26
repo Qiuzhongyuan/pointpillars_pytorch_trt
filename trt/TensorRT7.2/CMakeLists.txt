@@ -13,12 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-option(USE_FP16 "Build fp16" OFF)
-if(USE_FP16)
-    add_definitions(-DUSE_FP16)
-endif()
-
 cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
 include(cmake/modules/set_ifndef.cmake)
 include(cmake/modules/find_library_create_target.cmake)
@@ -74,6 +68,9 @@ option(USE_FP16 "Build fp16" OFF)
 if (USE_FP16)
 add_definitions(-DUSE_FP16)
 endif()
+
+add_definitions(-DPARAM_PATH)
+add_definitions(-DPARAM_XML="${PARAM_PATH}")
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -210,7 +207,7 @@ else()
     find_library_create_target(nvonnxparser nvonnxparser SHARED ${TRT_OUT_DIR} ${TRT_LIB_DIR})
 endif()
 
-if(BUILD_SAMPLES)
-    add_subdirectory(samples)
-endif()
+# if(BUILD_SAMPLES)
+#     add_subdirectory(samples)
+# endif()
 

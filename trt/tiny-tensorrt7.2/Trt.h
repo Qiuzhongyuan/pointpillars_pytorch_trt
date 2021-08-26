@@ -27,8 +27,6 @@
 #include "opencv2/highgui.hpp"
 #include "opencv2/opencv.hpp"
 
-#define INT8
-//#define TESTALL
 #define SAVEOUTPUT
 
 extern std::vector<cv::String> binnames;
@@ -42,60 +40,8 @@ Dtype round(Dtype r){
 class TrtLogger : public nvinfer1::ILogger {
     void log(Severity severity, const char* msg) override
     {
-        // suppress info-level messages
         if (severity != Severity::kVERBOSE)
             std::cout << msg << std::endl;
-    }
-};
-
-typedef struct MarkingPoint{
-    float x;
-    float y;
-    float d;
-    float shape;
-}MarkingPoint;
-
-typedef struct predicted_point{
-    float score;
-    MarkingPoint mp;
-}predicted_point;
-
-typedef struct Slot{
-    int x;
-    int y;
-}Slot;
-
-typedef struct Points_xy{
-    float x;
-    float y;
-}Points_xy;
-
-typedef struct PS{
-    Points_xy points1;
-    Points_xy points2;
-    float angle;
-}PS;
-
-typedef struct PS4{
-    Points_xy points1;
-    Points_xy points2;
-    Points_xy points3;
-    Points_xy points4;
-}PS4;
-
-struct BboxWithScore
-{
-	float tx, ty, bx, by, area, score;
-    int cate;
-    BboxWithScore()
-    {
-        tx = 0.;
-        ty = 0.;
-        bx = 0.;
-        by = 0.;
-		area = 0.;
-        score = 0.;
-        cate = 0;
     }
 };
 
@@ -117,30 +63,6 @@ public:
     ~Trt();
 
     /**
-     * description: create engine from caffe prototxt and caffe model
-     * @prototxt: caffe prototxt
-     * @caffemodel: caffe model contain network parameters
-     * @engineFile: serialzed engine file, if it does not exit, will build engine from
-     *             prototxt and caffe model, which take about 1 minites, otherwise will
-     *             deserialize enfine from engine file, which is very fast.
-     * @outputBlobName: specify which layer is network output, find it in caffe prototxt
-     * @calibratorData: use for int8 mode, calabrator data is a batch of sample input, 
-     *                  for classification task you need around 500 sample input. and this
-     *                  is for int8 mode
-     * @maxBatchSize: max batch size while inference, make sure it do not exceed max batch
-     *                size in your model
-     * @mode: engine run mode, 0 for float32, 1 for float16, 2 for int8
-     */
-    void CreateEngine(
-        const std::string& prototxt, 
-        const std::string& caffeModel,
-        const std::string& engineFile,
-        const std::vector<std::string>& outputBlobName,
-        int maxBatchSize,
-        int mode,
-        const std::vector<std::vector<float>>& calibratorData);
-    
-    /**
      * @description: create engine from onnx model
      * @onnxModel: path to onnx model
      * @engineFile: path to saved engien file will be load or save, if it's empty them will not
@@ -156,54 +78,16 @@ public:
         int mode,
         const std::vector<std::vector<float>>& calibratorData);
 
-    /**
-     * @description: create engine from uff model
-     * @uffModel: path to uff model
-     * @engineFile: path to saved engien file will be load or save, if it's empty them will not
-     *              save engine file
-     * @inputTensorName: input tensor
-     * @outputTensorName: output tensor
-     * @maxBatchSize: max batch size for inference.
-     * @return: 
-     */
-    void CreateEngine(
-        const std::string& uffModel,
-        const std::string& engineFile,
-        const std::vector<std::string>& inputTensorName,
-        const std::vector<std::vector<int>>& inputDims,
-        const std::vector<std::string>& outputTensorName,
-        int maxBatchSize,
-        int mode,
-        const std::vector<std::vector<float>>& calibratorData);
 
     /**
      * @description: do inference on engine context, make sure you already copy your data to device memory,
      *               see DataTransfer and CopyFromHostToDevice etc.
      */
-    void Forward();
-    void Forward_data(float* data, int length);
-    void Forward_mult(std::vector<void*>& data);
-    void Forward_mult_FP32(std::vector<void*>& data);
+    void Forward_mult_FP32(std::vector<void*>& data, int save_flag);
+
+    void Forward_mult_FP16(std::vector<void*>& data, int save_flag);
     
-    void Sigmoid(float* intput, float* output, int length);
-    cv::Mat renderSegment(cv::Mat image, const cv::Mat &mask);
-    void transform(const int &ih, const int &iw, const int &oh, const int &ow, cv::Mat &mask, bool is_padding);
-    cv::Mat Postprocess0(int h_scale, int w_scale);
 
-    float direction_diff(float direction_a, float direction_b);
-    int detemine_point_shape(MarkingPoint point, float* vector);
-    int pair_marking_points(MarkingPoint point_a, MarkingPoint point_b);
-    bool pass_through_third_point(std::vector<MarkingPoint>& mk_v, int i, int j);
-    std::vector<Slot> inference_slots(std::vector<MarkingPoint>& mk_v);
-    std::vector<predicted_point> non_maximum_suppression(std::vector<predicted_point>& pred_points);
-    std::vector<cv::Point2i> cal_point(MarkingPoint point, float entrance_len, int h, int w);
-    void plot_points(cv::Mat& image, std::vector<predicted_point>& pred_points);
-    std::vector<Slot> cal_slots(MarkingPoint point1, MarkingPoint point2, cv::Mat& image);
-    void plot_slots(cv::Mat& image, std::vector<MarkingPoint>& marking_points, std::vector<Slot>& slots);
-    void Postprocess1(float thresh, cv::Mat& image);
-    void Postprocess2(cv::Mat& image);
-
-    std::vector<BboxWithScore> NMS();
     /**
      * @description: async inference on engine context
      * @stream cuda stream for async inference and data transfer

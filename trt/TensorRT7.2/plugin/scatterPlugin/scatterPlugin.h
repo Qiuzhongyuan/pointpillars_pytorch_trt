@@ -48,7 +48,7 @@ class Dense : public nvinfer1::IPluginV2DynamicExt
 {
 public:
 
-    Dense(int batch_size, std::vector<int> spatialShape, int channels, int use_fp16);
+    Dense(std::vector<int> spatialShape, int use_fp16);
 
     Dense(const void* data, size_t length);
 
@@ -105,9 +105,7 @@ private:
 
     // Weights deserializeToDevice(const char*& hostBuffer, size_t count);
 
-    int _batch_size;
     std::vector<int> _spatialShape;
-    int _channels;
     int _use_fp16;
     
     const char* mPluginNamespace;

@@ -44,10 +44,6 @@ class PillarVFE(VFETemplate):
         super().__init__(model_cfg=model_cfg)
 
         self.use_norm = self.model_cfg.USE_NORM
-        self.with_distance = self.model_cfg.WITH_DISTANCE
-        self.use_absolute_xyz = self.model_cfg.USE_ABSLOTE_XYZ
-
-        self.DPU = self.model_cfg.get('DPU', False)
 
         num_point_features = 4
         self.center_offset = self.model_cfg.get('CENTER_OFFSET', 0)
@@ -56,11 +52,7 @@ class PillarVFE(VFETemplate):
         self.max_voxels = self.model_cfg.get('MAX_NUMBER_OF_VOXELS', 16000)
         self.supplement = self.model_cfg.get('SUPPLEMENT', 1)
 
-        if self.DPU:
-            self.cluster_offset = 0
-            self.act = nn.ReLU6
-        else:
-            self.act = nn.ReLU
+        self.act = nn.ReLU
 
         self.point_cloud_range = point_cloud_range
         self.voxel_size = voxel_size
@@ -70,9 +62,6 @@ class PillarVFE(VFETemplate):
 
         self.num_filters = self.model_cfg.NUM_FILTERS
         assert len(self.num_filters) > 0
-
-        if self.DPU:
-            num_point_features = 3
 
         num_filters = [num_point_features] + list(self.num_filters)
 
@@ -96,13 +85,11 @@ class PillarVFE(VFETemplate):
     def forward(self, batch_dict, **kwargs):
         points = batch_dict['points']
         valid_num = batch_dict['valid_num'].int()
-        batch_size = batch_dict['batch_size']
 
-        features, coords, ValidOutput, num_points_per_voxel = self.VoxelGeneratorV1(points, valid_num, batch_size)
-        batch_dict['voxel_coords'] = coords # coord: (N, 4)
+        features, coords, ValidOutput, num_points_per_voxel = self.VoxelGeneratorV1(points, valid_num)
+        batch_dict['voxel_coords'] = coords # coord: (N, 3)
+        batch_dict['voxel_valid'] = ValidOutput  # coord: (N,)
         features = features.unsqueeze(0).permute(0, 3, 1, 2).contiguous()  # (12000, 32, 10) -> (1, 12000, 32, 10) -> (1, 10, 12000, 32)
-        if self.DPU:
-            features = features[:,4:,:,:].contiguous()
 
         for pfn in self.pfn_layers:
             features = pfn(features)

@@ -24,7 +24,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <cuda_voxel_generator.h>
+#include <cuda_voxelV1_generator.h>
 #include <cuda_fp16.h>
 #include <kernel.h>
 #include <thrust/device_ptr.h>
@@ -51,7 +51,8 @@ class VoxelGeneratorV1 : public nvinfer1::IPluginV2DynamicExt
 {
 public:
 
-    VoxelGeneratorV1(int batch_size, int max_num_points, int max_voxels, std::vector<float> point_cloud_range, std::vector<float> voxel_size, int center_offset, int cluster_offset, int supplement);
+    VoxelGeneratorV1(int batch_size, int max_num_points, int max_voxels, std::vector<float> point_cloud_range, std::vector<float> voxel_size, int center_offset, 
+                     int cluster_offset, int supplement, int use_fp16);
 
     VoxelGeneratorV1(const void* data, size_t length);
 
@@ -114,6 +115,7 @@ private:
     int _center_offset;
     int _cluster_offset;
     int _supplement;
+    int _use_fp16;
     std::vector<float> _point_cloud_range;
     std::vector<float> _voxel_size;
     

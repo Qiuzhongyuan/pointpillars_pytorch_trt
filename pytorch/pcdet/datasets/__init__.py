@@ -56,6 +56,7 @@ def build_dataloader(dataset_cfg, class_names, batch_size, dist, root_path=None,
         dataset.merge_all_iters_to_one_epoch(merge=True, epochs=total_epochs)
 
     if dist:
+        workers = 0
         if training:
             sampler = torch.utils.data.distributed.DistributedSampler(dataset)
         else:
@@ -66,7 +67,7 @@ def build_dataloader(dataset_cfg, class_names, batch_size, dist, root_path=None,
 
     setattr(dataset, 'batch_size', batch_size)
     dataloader = DataLoader(
-        dataset, batch_size=batch_size, pin_memory=True, num_workers=0,
+        dataset, batch_size=batch_size, pin_memory=True, num_workers=workers,
         shuffle=(sampler is None) and training, collate_fn=dataset.collate_batch,
         drop_last=False, sampler=sampler, timeout=0
     )

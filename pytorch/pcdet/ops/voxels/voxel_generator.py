@@ -45,7 +45,8 @@ class VoxelGenerator(torch.nn.Module):
         else:
             raise RuntimeError('error: please check VoxelGenerator type: %s.' % type)
     
-    def forward(self, points, ValidInput, batch_size):
+    def forward(self, points, ValidInput):
+        batch_size = int(ValidInput.size(0))
         if self.generator_type == 'mean':
             voxel_output = self.voxel_generator(points, ValidInput, self.voxel_size, self.point_cloud_range, self.max_num_points, self.max_voxels, batch_size)
         elif self.generator_type == 'raw':
